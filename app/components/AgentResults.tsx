@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useVoiceStore, ActionItem, Track, TranslationResult, DevLogResult, BrainDumpResult, BrainDumpTask, EisenhowerQuadrant } from '../store/voiceStore';
+import { useVoiceStore, ActionItem, Track, TranslationResult, DevLogResult, BrainDumpResult, BrainDumpTask, EisenhowerQuadrant, MentalMirrorResult } from '../store/voiceStore';
 
 const LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -149,6 +149,8 @@ export function AgentResults() {
     devLogStreaming,
     brainDumpResult,
     brainDumpStreaming,
+    mentalMirrorResult,
+    mentalMirrorStreaming,
     isProcessing,
     processingMessage,
   } = useVoiceStore();
@@ -160,7 +162,7 @@ export function AgentResults() {
   return (
     <div className="w-full">
       <div className="glass rounded-lg p-4">
-        {isProcessing && activeAgent !== 'tone-shifter' && activeAgent !== 'translator' && activeAgent !== 'action-items' && activeAgent !== 'dev-log' && activeAgent !== 'brain-dump' && (
+        {isProcessing && activeAgent !== 'tone-shifter' && activeAgent !== 'translator' && activeAgent !== 'action-items' && activeAgent !== 'dev-log' && activeAgent !== 'brain-dump' && activeAgent !== 'mental-mirror' && (
           <div className="flex items-center gap-3 text-gray-400">
             <LoadingSpinner />
             <span className="text-sm">{processingMessage || 'Processing...'}</span>
@@ -203,6 +205,14 @@ export function AgentResults() {
           <BrainDumpDisplay
             result={brainDumpResult}
             streaming={brainDumpStreaming}
+            isProcessing={isProcessing}
+          />
+        )}
+
+        {activeAgent === 'mental-mirror' && (
+          <MentalMirrorDisplay
+            result={mentalMirrorResult}
+            streaming={mentalMirrorStreaming}
             isProcessing={isProcessing}
           />
         )}
@@ -298,7 +308,20 @@ function ActionItemsDisplay({ items, isProcessing }: { items: ActionItem[]; isPr
       </div>
       <div className={`transition-all duration-300 ${showBlur ? 'blur-[2px] select-none' : 'blur-0'}`}>
         {translatedText ? (
-          <div className="text-white text-sm whitespace-pre-line">{translatedText}</div>
+          <div className="p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50">
+            <div className="text-white text-sm whitespace-pre-line leading-relaxed prose-invert">
+              {translatedText.split('\n').map((line, i) => {
+                const isNumbered = /^\d+\./.test(line.trim());
+                const isBulleted = line.trim().startsWith('-') || line.trim().startsWith('•');
+                const isHeader = line.includes('[') && line.includes(']');
+                return (
+                  <p key={i} className={`${i > 0 ? 'mt-1' : ''} ${isNumbered || isBulleted ? 'pl-2' : ''} ${isHeader ? 'font-medium' : ''}`}>
+                    {line || '\u00A0'}
+                  </p>
+                );
+              })}
+            </div>
+          </div>
         ) : (
           <ul className="space-y-3">
             {items.map((item, index) => (
@@ -414,12 +437,14 @@ function ToneShiftDisplay({
         )}
       </div>
       <div
-        className={`text-white text-sm leading-relaxed transition-all duration-300 ${
+        className={`p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50 transition-all duration-300 ${
           showBlur ? 'blur-[2px] select-none' : 'blur-0'
         }`}
       >
-        {displayText}
-        {(isProcessing || isTranslating) && <span className="animate-pulse">|</span>}
+        <p className="text-white text-sm leading-relaxed whitespace-pre-wrap">
+          {displayText}
+          {(isProcessing || isTranslating) && <span className="animate-pulse">|</span>}
+        </p>
       </div>
     </div>
   );
@@ -544,12 +569,14 @@ function TranslationDisplay({
         )}
       </div>
       <div
-        className={`text-white text-sm leading-relaxed transition-all duration-300 ${
+        className={`p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50 transition-all duration-300 ${
           isProcessing ? 'blur-[2px] select-none' : 'blur-0'
         }`}
       >
-        {displayText}
-        {isProcessing && <span className="animate-pulse">|</span>}
+        <p className="text-white text-sm leading-relaxed whitespace-pre-wrap">
+          {displayText}
+          {isProcessing && <span className="animate-pulse">|</span>}
+        </p>
       </div>
     </div>
   );
@@ -839,7 +866,29 @@ function BrainDumpDisplay({
 
       {/* Show translated text if available */}
       {translatedText ? (
-        <div className="text-white text-sm whitespace-pre-line">{translatedText}</div>
+        <div className="p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50">
+          <div className="text-white text-sm leading-relaxed">
+            {translatedText.split('\n').map((line, i) => {
+              const trimmed = line.trim();
+              const isHeader = trimmed === 'TASKS:' || trimmed === 'IDEAS:' || trimmed === 'NOTES:' || trimmed.startsWith('Summary:');
+              const isNumbered = /^\d+\./.test(trimmed);
+              const isEmpty = trimmed === '';
+              return (
+                <p
+                  key={i}
+                  className={`
+                    ${isEmpty ? 'h-2' : ''}
+                    ${isHeader ? 'font-semibold text-voice-primary mt-3 first:mt-0 uppercase text-xs tracking-wider' : ''}
+                    ${isNumbered ? 'pl-2 mt-1' : ''}
+                    ${!isHeader && !isNumbered && !isEmpty ? 'mt-1' : ''}
+                  `}
+                >
+                  {line || '\u00A0'}
+                </p>
+              );
+            })}
+          </div>
+        </div>
       ) : result && (
         <>
           {/* Tabs */}
@@ -970,6 +1019,211 @@ function BrainDumpDisplay({
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+function MentalMirrorDisplay({
+  result,
+  streaming,
+  isProcessing,
+}: {
+  result: MentalMirrorResult | null;
+  streaming: string;
+  isProcessing: boolean;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+  const { isSpeaking, speak, stop } = useTextToSpeech();
+  const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+
+  const formatForText = (): string => {
+    if (!result) return '';
+    return `LETTER TO MY FUTURE SELF
+${result.date}
+
+REFLECTION
+${result.reflection}
+
+MENTAL CHECK-IN
+${result.mental_checkin}
+
+THE RELEASE
+${result.the_release}
+
+MESSAGE TO TOMORROW
+${result.message_to_tomorrow}
+
+---
+${result.disclaimer}`;
+  };
+
+  const originalText = result ? formatForText() : null;
+
+  const {
+    targetLanguage,
+    setTargetLanguage,
+    translatedText,
+    isTranslating,
+    clearTranslation,
+  } = useOutputTranslation(originalText);
+
+  const showBlur = isProcessing || isTranslating;
+
+  if (!result && !isProcessing) {
+    return null;
+  }
+
+  if (isProcessing && !result) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-gray-400">
+        <div className="relative mb-4">
+          <LetterHeartIcon className="w-12 h-12 text-pink-400/50 animate-pulse" />
+        </div>
+        <span className="text-sm">Creating your letter with care...</span>
+      </div>
+    );
+  }
+
+  const speakLetter = () => {
+    const text = translatedText || formatForText();
+    speak(text);
+  };
+
+  return (
+    <div className={`transition-all duration-500 ${showBlur ? 'blur-[3px] select-none' : 'blur-0'}`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <LetterHeartIcon className="w-5 h-5 text-pink-400" />
+          <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+            Letter to My Future Self
+            {targetLanguage && (
+              <span className="ml-2 normal-case text-voice-primary">
+                → {LANGUAGES.find(l => l.code === targetLanguage)?.name}
+              </span>
+            )}
+          </h3>
+        </div>
+        <div className="flex items-center gap-1">
+          <SpeakButton isSpeaking={isSpeaking} onSpeak={speakLetter} onStop={stop} />
+          <div className="relative">
+            <button
+              onClick={() => setShowLanguageMenu(!showLanguageMenu)}
+              className={`p-1 transition-colors rounded ${
+                targetLanguage ? 'text-voice-primary' : 'text-gray-500 hover:text-white'
+              }`}
+              title="Translate"
+              disabled={isProcessing}
+            >
+              <TranslateIcon className="w-4 h-4" />
+            </button>
+            {showLanguageMenu && !isProcessing && (
+              <LanguageMenu
+                currentLanguage={targetLanguage}
+                onSelect={(lang) => {
+                  if (lang === targetLanguage) {
+                    clearTranslation();
+                  } else {
+                    setTargetLanguage(lang);
+                  }
+                  setShowLanguageMenu(false);
+                }}
+                onClose={() => setShowLanguageMenu(false)}
+              />
+            )}
+          </div>
+          <CopyButton copied={copied} onClick={() => copy(translatedText || formatForText())} />
+        </div>
+      </div>
+
+      {/* Show translated text if available */}
+      {translatedText ? (
+        <div className="p-4 bg-gradient-to-br from-pink-950/20 via-voice-surface/30 to-purple-950/20 rounded-xl border border-pink-500/20">
+          <div className="text-white text-sm leading-relaxed">
+            {translatedText.split('\n').map((line, i) => {
+              const trimmed = line.trim();
+              const isHeader = ['LETTER TO MY FUTURE SELF', 'REFLECTION', 'MENTAL CHECK-IN', 'THE RELEASE', 'MESSAGE TO TOMORROW'].includes(trimmed);
+              const isDate = trimmed.includes(',') && (trimmed.includes('January') || trimmed.includes('February') || trimmed.includes('March') || trimmed.includes('April') || trimmed.includes('May') || trimmed.includes('June') || trimmed.includes('July') || trimmed.includes('August') || trimmed.includes('September') || trimmed.includes('October') || trimmed.includes('November') || trimmed.includes('December'));
+              const isDivider = trimmed === '---';
+              const isEmpty = trimmed === '';
+              return (
+                <p
+                  key={i}
+                  className={`
+                    ${isEmpty ? 'h-3' : ''}
+                    ${isHeader ? 'font-semibold text-pink-300 mt-4 first:mt-0 text-sm tracking-wide' : ''}
+                    ${isDate ? 'text-gray-400 text-xs italic mb-2' : ''}
+                    ${isDivider ? 'border-t border-pink-500/20 my-4' : ''}
+                    ${!isHeader && !isDate && !isDivider && !isEmpty ? 'mt-1' : ''}
+                  `}
+                >
+                  {isDivider ? null : line || '\u00A0'}
+                </p>
+              );
+            })}
+          </div>
+        </div>
+      ) : result && (
+        <div className="space-y-0">
+          {/* Letter Card */}
+          <div className="relative bg-gradient-to-br from-pink-950/20 via-voice-surface/30 to-purple-950/20 rounded-xl border border-pink-500/20 overflow-hidden">
+            {/* Decorative corner */}
+            <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-pink-500/10 to-transparent" />
+
+            {/* Date */}
+            <div className="px-5 pt-4 pb-2">
+              <p className="text-xs text-gray-400 italic">{result.date}</p>
+            </div>
+
+            {/* Letter Sections */}
+            <div className="px-5 pb-5 space-y-5">
+              {/* Reflection */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-1 h-4 bg-pink-400 rounded-full" />
+                  <h4 className="text-xs font-semibold text-pink-300 uppercase tracking-wider">Reflection</h4>
+                </div>
+                <p className="text-sm text-gray-200 leading-relaxed pl-3">{result.reflection}</p>
+              </div>
+
+              {/* Mental Check-in */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-1 h-4 bg-blue-400 rounded-full" />
+                  <h4 className="text-xs font-semibold text-blue-300 uppercase tracking-wider">Mental Check-in</h4>
+                </div>
+                <p className="text-sm text-gray-200 leading-relaxed pl-3">{result.mental_checkin}</p>
+              </div>
+
+              {/* The Release */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-1 h-4 bg-purple-400 rounded-full" />
+                  <h4 className="text-xs font-semibold text-purple-300 uppercase tracking-wider">The Release</h4>
+                </div>
+                <p className="text-sm text-gray-200 leading-relaxed pl-3">{result.the_release}</p>
+              </div>
+
+              {/* Message to Tomorrow */}
+              <div className="pt-2 border-t border-pink-500/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-1 h-4 bg-amber-400 rounded-full" />
+                  <h4 className="text-xs font-semibold text-amber-300 uppercase tracking-wider">Message to Tomorrow</h4>
+                </div>
+                <p className="text-sm text-gray-200 leading-relaxed pl-3 italic">{result.message_to_tomorrow}</p>
+              </div>
+            </div>
+
+            {/* Disclaimer */}
+            <div className="px-5 py-3 bg-black/20 border-t border-pink-500/10">
+              <p className="text-[10px] text-gray-500 leading-relaxed">
+                <ShieldIcon className="w-3 h-3 inline mr-1 opacity-50" />
+                {result.disclaimer}
+              </p>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -1190,6 +1444,35 @@ function LightbulbIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+      />
+    </svg>
+  );
+}
+
+function LetterHeartIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21.75 9v.906a2.25 2.25 0 01-1.183 1.981l-6.478 3.488M2.25 9v.906a2.25 2.25 0 001.183 1.981l6.478 3.488m8.839 2.51l-4.66-2.51m0 0l-1.023-.55a2.25 2.25 0 00-2.134 0l-1.022.55m0 0l-4.661 2.51m16.5 1.615a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V8.844a2.25 2.25 0 011.183-1.98l7.5-4.04a2.25 2.25 0 012.134 0l7.5 4.04a2.25 2.25 0 011.183 1.98V19.5z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 10.5l-1.5-1.5a2.121 2.121 0 00-3 3l4.5 4.5 4.5-4.5a2.121 2.121 0 00-3-3L12 10.5z"
+      />
+    </svg>
+  );
+}
+
+function ShieldIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
       />
     </svg>
   );

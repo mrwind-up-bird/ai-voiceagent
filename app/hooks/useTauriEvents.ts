@@ -94,6 +94,20 @@ interface BrainDumpResultPayload {
   summary: string;
 }
 
+interface MentalMirrorChunkPayload {
+  text: string;
+  is_complete: boolean;
+}
+
+interface MentalMirrorResultPayload {
+  reflection: string;
+  mental_checkin: string;
+  the_release: string;
+  message_to_tomorrow: string;
+  date: string;
+  disclaimer: string;
+}
+
 interface MusicMatchPayload {
   tracks: Array<{
     id: string;
@@ -137,6 +151,9 @@ export function useTauriEvents() {
     setBrainDumpResult,
     appendBrainDumpStreaming,
     clearBrainDumpStreaming,
+    setMentalMirrorResult,
+    appendMentalMirrorStreaming,
+    clearMentalMirrorStreaming,
     setProcessing,
     setError,
   } = useVoiceStore();
@@ -356,6 +373,32 @@ export function useTauriEvents() {
           }
         );
         listeners.push(unlistenBrainDumpComplete);
+
+        // Mental Mirror (Letter to Myself) events
+        const unlistenMentalMirrorStarted = await listen('mental-mirror-started', () => {
+          clearMentalMirrorStreaming();
+          setProcessing(true, 'Writing your letter...');
+        });
+        listeners.push(unlistenMentalMirrorStarted);
+
+        const unlistenMentalMirrorChunk = await listen<MentalMirrorChunkPayload>(
+          'mental-mirror-chunk',
+          (event: TauriEvent<MentalMirrorChunkPayload>) => {
+            if (!event.payload.is_complete) {
+              appendMentalMirrorStreaming(event.payload.text);
+            }
+          }
+        );
+        listeners.push(unlistenMentalMirrorChunk);
+
+        const unlistenMentalMirrorComplete = await listen<MentalMirrorResultPayload>(
+          'mental-mirror-complete',
+          (event: TauriEvent<MentalMirrorResultPayload>) => {
+            setMentalMirrorResult(event.payload);
+            setProcessing(false);
+          }
+        );
+        listeners.push(unlistenMentalMirrorComplete);
       } catch (error) {
         // Running outside Tauri (e.g., in browser dev mode)
         console.log('Tauri events not available:', error);
@@ -388,6 +431,9 @@ export function useTauriEvents() {
     setBrainDumpResult,
     appendBrainDumpStreaming,
     clearBrainDumpStreaming,
+    setMentalMirrorResult,
+    appendMentalMirrorStreaming,
+    clearMentalMirrorStreaming,
     setProcessing,
     setError,
   ]);

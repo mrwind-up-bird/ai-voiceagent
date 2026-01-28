@@ -86,7 +86,16 @@ export interface BrainDumpResult {
   summary: string;
 }
 
-export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | 'dev-log' | 'brain-dump' | null;
+export interface MentalMirrorResult {
+  reflection: string;
+  mental_checkin: string;
+  the_release: string;
+  message_to_tomorrow: string;
+  date: string;
+  disclaimer: string;
+}
+
+export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | 'dev-log' | 'brain-dump' | 'mental-mirror' | null;
 export type RecordingState = 'idle' | 'recording' | 'processing';
 
 interface VoiceState {
@@ -155,6 +164,13 @@ interface VoiceState {
   appendBrainDumpStreaming: (text: string) => void;
   clearBrainDumpStreaming: () => void;
 
+  // Mental Mirror (Letter to Myself)
+  mentalMirrorResult: MentalMirrorResult | null;
+  mentalMirrorStreaming: string;
+  setMentalMirrorResult: (result: MentalMirrorResult | null) => void;
+  appendMentalMirrorStreaming: (text: string) => void;
+  clearMentalMirrorStreaming: () => void;
+
   // Processing state
   isProcessing: boolean;
   processingMessage: string;
@@ -198,6 +214,8 @@ const initialState = {
   devLogStreaming: '',
   brainDumpResult: null,
   brainDumpStreaming: '',
+  mentalMirrorResult: null,
+  mentalMirrorStreaming: '',
   isProcessing: false,
   processingMessage: '',
   error: null,
@@ -274,6 +292,13 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
     set((state) => ({ brainDumpStreaming: state.brainDumpStreaming + text })),
 
   clearBrainDumpStreaming: () => set({ brainDumpStreaming: '' }),
+
+  setMentalMirrorResult: (result) => set({ mentalMirrorResult: result }),
+
+  appendMentalMirrorStreaming: (text) =>
+    set((state) => ({ mentalMirrorStreaming: state.mentalMirrorStreaming + text })),
+
+  clearMentalMirrorStreaming: () => set({ mentalMirrorStreaming: '' }),
 
   setProcessing: (isProcessing, message = '') =>
     set({ isProcessing, processingMessage: message }),

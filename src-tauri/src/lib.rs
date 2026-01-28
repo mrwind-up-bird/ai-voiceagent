@@ -106,6 +106,9 @@ pub fn run() {
             // Brain Dump agent
             agents::brain_dump::process_brain_dump,
             agents::brain_dump::process_brain_dump_streaming,
+            // Mental Mirror agent (Letter to Myself)
+            agents::mental_mirror::generate_mental_mirror,
+            agents::mental_mirror::generate_mental_mirror_streaming,
             // Text-to-Speech
             tts::speak_text,
             tts::stop_speech,
