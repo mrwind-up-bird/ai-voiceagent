@@ -65,7 +65,7 @@ struct AnthropicDelta {
     text: Option<String>,
 }
 
-fn build_system_prompt(tone: &ToneType, intensity: u8) -> String {
+fn build_system_prompt(tone: &ToneType, intensity: u8, length_adjustment: i8) -> String {
     let intensity_desc = match intensity {
         1..=3 => "subtle",
         4..=6 => "moderate",
@@ -82,24 +82,39 @@ fn build_system_prompt(tone: &ToneType, intensity: u8) -> String {
         _ => "Make balanced changes - adjust vocabulary and some phrasing while maintaining the overall structure.",
     };
 
+    let length_guidance = match length_adjustment {
+        -50..=-30 => "Make the output MUCH SHORTER (about 50% of original length). Be very concise, remove redundancy, use brief phrasing.",
+        -29..=-10 => "Make the output SHORTER (about 70-80% of original length). Be more concise, tighten sentences.",
+        -9..=9 => "Keep the output roughly the SAME LENGTH as the original (within 10%).",
+        10..=30 => "Make the output LONGER (about 120-130% of original length). Add more detail, elaboration, and context.",
+        31..=60 => "Make the output MUCH LONGER (about 150% of original length). Expand significantly with more explanation, examples, and detail.",
+        61..=100 => "Make the output SUBSTANTIALLY LONGER (about 180-200% of original length). Add extensive elaboration, background, examples, and nuance.",
+        _ => "Keep the output roughly the SAME LENGTH as the original (within 10%).",
+    };
+
     format!(
         r#"You are a tone-shifting assistant. Your task is to rewrite text to match a {} tone while preserving the original meaning and key information.
 
 Intensity Level: {} ({}/10)
 {}
 
+Length Adjustment: {}%
+{}
+
 Guidelines:
 - Maintain the core message and all factual content
 - Adjust vocabulary, sentence structure, and phrasing to match the target tone
-- Keep the text roughly the same length (within 20%)
-- Do not add new information or opinions
+- Follow the length guidance above
+- Do not add new information or opinions not implied by the original
 - Preserve any specific names, dates, or technical terms
 
 Respond with ONLY the rewritten text, no explanations or preamble."#,
         tone.description(),
         intensity_desc,
         intensity,
-        intensity_guidance
+        intensity_guidance,
+        if length_adjustment >= 0 { format!("+{}", length_adjustment) } else { length_adjustment.to_string() },
+        length_guidance
     )
 }
 
@@ -110,18 +125,26 @@ pub async fn shift_tone(
     text: String,
     target_tone: ToneType,
     intensity: Option<u8>,
+    length_adjustment: Option<i8>,
 ) -> Result<ToneShiftResult, String> {
     let intensity = intensity.unwrap_or(5).clamp(1, 10);
+    let length_adjustment = length_adjustment.unwrap_or(0).clamp(-50, 100);
     let client = reqwest::Client::new();
+
+    let length_instruction = if length_adjustment != 0 {
+        format!(" Adjust length by {}%.", if length_adjustment > 0 { format!("+{}", length_adjustment) } else { length_adjustment.to_string() })
+    } else {
+        String::new()
+    };
 
     let request_body = serde_json::json!({
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 2048,
-        "system": build_system_prompt(&target_tone, intensity),
+        "max_tokens": 4096,
+        "system": build_system_prompt(&target_tone, intensity, length_adjustment),
         "messages": [
             {
                 "role": "user",
-                "content": format!("Rewrite this text in a {} tone (intensity {}/10):\n\n{}", target_tone.description(), intensity, text)
+                "content": format!("Rewrite this text in a {} tone (intensity {}/10).{}\n\n{}", target_tone.description(), intensity, length_instruction, text)
             }
         ]
     });
@@ -170,19 +193,27 @@ pub async fn shift_tone_streaming(
     text: String,
     target_tone: ToneType,
     intensity: Option<u8>,
+    length_adjustment: Option<i8>,
 ) -> Result<(), String> {
     let intensity = intensity.unwrap_or(5).clamp(1, 10);
+    let length_adjustment = length_adjustment.unwrap_or(0).clamp(-50, 100);
     let client = reqwest::Client::new();
+
+    let length_instruction = if length_adjustment != 0 {
+        format!(" Adjust length by {}%.", if length_adjustment > 0 { format!("+{}", length_adjustment) } else { length_adjustment.to_string() })
+    } else {
+        String::new()
+    };
 
     let request_body = serde_json::json!({
         "model": "claude-sonnet-4-20250514",
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "stream": true,
-        "system": build_system_prompt(&target_tone, intensity),
+        "system": build_system_prompt(&target_tone, intensity, length_adjustment),
         "messages": [
             {
                 "role": "user",
-                "content": format!("Rewrite this text in a {} tone (intensity {}/10):\n\n{}", target_tone.description(), intensity, text)
+                "content": format!("Rewrite this text in a {} tone (intensity {}/10).{}\n\n{}", target_tone.description(), intensity, length_instruction, text)
             }
         ]
     });

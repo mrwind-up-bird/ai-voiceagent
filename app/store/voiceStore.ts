@@ -117,6 +117,8 @@ interface VoiceState {
   setSelectedTone: (tone: string) => void;
   toneIntensity: number;
   setToneIntensity: (intensity: number) => void;
+  toneLengthAdjustment: number;
+  setToneLengthAdjustment: (adjustment: number) => void;
 
   // Reset
   reset: () => void;
@@ -145,6 +147,7 @@ const initialState = {
   error: null,
   selectedTone: 'professional',
   toneIntensity: 5,
+  toneLengthAdjustment: 0,
 };
 
 export const useVoiceStore = create<VoiceState>((set, get) => ({
@@ -210,6 +213,8 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   setSelectedTone: (tone) => set({ selectedTone: tone }),
 
   setToneIntensity: (intensity) => set({ toneIntensity: Math.max(1, Math.min(10, intensity)) }),
+
+  setToneLengthAdjustment: (adjustment) => set({ toneLengthAdjustment: Math.max(-50, Math.min(100, adjustment)) }),
 
   reset: () => set(initialState),
 }));

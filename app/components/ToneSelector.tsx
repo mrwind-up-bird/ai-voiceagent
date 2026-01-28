@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useVoiceStore } from '../store/voiceStore';
 
 interface TonePreset {
@@ -14,10 +14,48 @@ interface TonePreset {
   color: string;
 }
 
+// Debounce hook for slider
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debouncedValue;
+}
+
 export function ToneSelector() {
-  const { activeAgent, selectedTone, setSelectedTone, toneIntensity, setToneIntensity } = useVoiceStore();
+  const {
+    activeAgent,
+    selectedTone,
+    setSelectedTone,
+    toneIntensity,
+    setToneIntensity,
+    toneLengthAdjustment,
+    setToneLengthAdjustment,
+    transcript,
+    toneShiftResult,
+    isProcessing,
+    setProcessing,
+    setError,
+    clearToneShiftStreaming,
+    setToneShiftResult,
+  } = useVoiceStore();
+
   const [presets, setPresets] = useState<TonePreset[]>([]);
   const [expandedPreset, setExpandedPreset] = useState<string | null>(null);
+
+  // Track if user has triggered tone shift at least once
+  const hasRunOnce = useRef(false);
+  const previousTone = useRef(selectedTone);
+  const previousIntensity = useRef(toneIntensity);
+  const previousLengthAdjustment = useRef(toneLengthAdjustment);
+
+  // Debounce slider changes (500ms delay)
+  const debouncedIntensity = useDebounce(toneIntensity, 500);
+  const debouncedLengthAdjustment = useDebounce(toneLengthAdjustment, 500);
 
   const getIntensityLabel = (value: number): string => {
     if (value <= 3) return 'Subtle';
@@ -25,6 +63,110 @@ export function ToneSelector() {
     if (value <= 8) return 'Strong';
     return 'Maximum';
   };
+
+  const getLengthLabel = (value: number): string => {
+    if (value <= -30) return 'Much Shorter';
+    if (value <= -10) return 'Shorter';
+    if (value < 10) return 'Same Length';
+    if (value < 30) return 'Longer';
+    if (value < 60) return 'Much Longer';
+    return 'Very Long';
+  };
+
+  // Run tone shift
+  const runToneShift = useCallback(async (tone: string, intensity: number, lengthAdjustment: number) => {
+    if (!transcript || isProcessing) return;
+
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const anthropicKey = await invoke<string | null>('get_api_key', { keyType: 'anthropic' });
+
+      if (!anthropicKey) {
+        setError('Anthropic API key required for Tone Shifter');
+        return;
+      }
+
+      // Clear previous results before starting new request
+      clearToneShiftStreaming();
+      setToneShiftResult(null);
+      setProcessing(true, 'Shifting tone...');
+
+      await invoke('shift_tone_streaming', {
+        apiKey: anthropicKey,
+        text: transcript,
+        targetTone: tone,
+        intensity: intensity,
+        lengthAdjustment: lengthAdjustment,
+      });
+    } catch (error) {
+      console.error('Tone shift error:', error);
+      setError(error instanceof Error ? error.message : 'Tone shift failed');
+      setProcessing(false);
+    }
+  }, [transcript, isProcessing, setProcessing, setError, clearToneShiftStreaming, setToneShiftResult]);
+
+  // Auto-rerun when tone changes (immediate)
+  useEffect(() => {
+    if (
+      activeAgent === 'tone-shifter' &&
+      hasRunOnce.current &&
+      selectedTone !== previousTone.current &&
+      !isProcessing &&
+      transcript
+    ) {
+      previousTone.current = selectedTone;
+      runToneShift(selectedTone, toneIntensity, toneLengthAdjustment);
+    }
+  }, [selectedTone, activeAgent, isProcessing, toneIntensity, toneLengthAdjustment, runToneShift, transcript]);
+
+  // Auto-rerun when intensity changes (debounced)
+  useEffect(() => {
+    if (
+      activeAgent === 'tone-shifter' &&
+      hasRunOnce.current &&
+      debouncedIntensity !== previousIntensity.current &&
+      !isProcessing &&
+      transcript
+    ) {
+      previousIntensity.current = debouncedIntensity;
+      runToneShift(selectedTone, debouncedIntensity, toneLengthAdjustment);
+    }
+  }, [debouncedIntensity, activeAgent, isProcessing, selectedTone, toneLengthAdjustment, runToneShift, transcript]);
+
+  // Auto-rerun when length adjustment changes (debounced)
+  useEffect(() => {
+    if (
+      activeAgent === 'tone-shifter' &&
+      hasRunOnce.current &&
+      debouncedLengthAdjustment !== previousLengthAdjustment.current &&
+      !isProcessing &&
+      transcript
+    ) {
+      previousLengthAdjustment.current = debouncedLengthAdjustment;
+      runToneShift(selectedTone, toneIntensity, debouncedLengthAdjustment);
+    }
+  }, [debouncedLengthAdjustment, activeAgent, isProcessing, selectedTone, toneIntensity, runToneShift, transcript]);
+
+  // Track when tone shift has been run at least once (when processing completes)
+  useEffect(() => {
+    if (toneShiftResult && activeAgent === 'tone-shifter' && !isProcessing) {
+      // Only initialize previous values on FIRST run
+      // Subsequent runs are handled by auto-rerun effects which update refs before API call
+      if (!hasRunOnce.current) {
+        previousTone.current = selectedTone;
+        previousIntensity.current = toneIntensity;
+        previousLengthAdjustment.current = toneLengthAdjustment;
+      }
+      hasRunOnce.current = true;
+    }
+  }, [toneShiftResult, activeAgent, isProcessing, selectedTone, toneIntensity, toneLengthAdjustment]);
+
+  // Reset tracking when agent changes
+  useEffect(() => {
+    if (activeAgent !== 'tone-shifter') {
+      hasRunOnce.current = false;
+    }
+  }, [activeAgent]);
 
   useEffect(() => {
     async function loadPresets() {
@@ -169,6 +311,53 @@ export function ToneSelector() {
           {toneIntensity > 3 && toneIntensity <= 6 && 'Balanced changes - adjusts vocabulary and phrasing'}
           {toneIntensity > 6 && toneIntensity <= 8 && 'Significant rewrite - substantially different language'}
           {toneIntensity > 8 && 'Complete transformation - dramatically different style'}
+        </div>
+      </div>
+
+      {/* Length adjustment slider */}
+      <div className="mt-3 p-3 bg-voice-surface/50 rounded-lg">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+            Output Length
+          </span>
+          <span className="text-xs text-white">
+            {getLengthLabel(toneLengthAdjustment)} ({toneLengthAdjustment > 0 ? '+' : ''}{toneLengthAdjustment}%)
+          </span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-gray-500">-50%</span>
+          <input
+            type="range"
+            min="-50"
+            max="100"
+            step="10"
+            value={toneLengthAdjustment}
+            onChange={(e) => setToneLengthAdjustment(parseInt(e.target.value))}
+            className="flex-1 h-1.5 bg-voice-border rounded-full appearance-none cursor-pointer
+              [&::-webkit-slider-thumb]:appearance-none
+              [&::-webkit-slider-thumb]:w-4
+              [&::-webkit-slider-thumb]:h-4
+              [&::-webkit-slider-thumb]:rounded-full
+              [&::-webkit-slider-thumb]:bg-emerald-500
+              [&::-webkit-slider-thumb]:cursor-pointer
+              [&::-webkit-slider-thumb]:transition-transform
+              [&::-webkit-slider-thumb]:hover:scale-110
+              [&::-moz-range-thumb]:w-4
+              [&::-moz-range-thumb]:h-4
+              [&::-moz-range-thumb]:rounded-full
+              [&::-moz-range-thumb]:bg-emerald-500
+              [&::-moz-range-thumb]:border-0
+              [&::-moz-range-thumb]:cursor-pointer"
+          />
+          <span className="text-xs text-gray-500">+100%</span>
+        </div>
+        <div className="mt-2 text-xs text-gray-500">
+          {toneLengthAdjustment <= -30 && 'Very concise - removes redundancy, brief phrasing'}
+          {toneLengthAdjustment > -30 && toneLengthAdjustment <= -10 && 'More concise - tightens sentences'}
+          {toneLengthAdjustment > -10 && toneLengthAdjustment < 10 && 'Maintains original length'}
+          {toneLengthAdjustment >= 10 && toneLengthAdjustment < 30 && 'Adds more detail and context'}
+          {toneLengthAdjustment >= 30 && toneLengthAdjustment < 60 && 'Significantly expanded with examples'}
+          {toneLengthAdjustment >= 60 && 'Extensive elaboration and background'}
         </div>
       </div>
     </div>
