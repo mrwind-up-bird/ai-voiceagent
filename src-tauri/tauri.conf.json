@@ -13,12 +13,12 @@
     "windows": [
       {
         "title": "Aurus Voice Intelligence",
-        "width": 900,
-        "height": 600,
-        "minWidth": 600,
-        "minHeight": 400,
-        "maxWidth": 1200,
-        "maxHeight": 1000,
+        "width": 1000,
+        "height": 700,
+        "minWidth": 700,
+        "minHeight": 500,
+        "maxWidth": 1500,
+        "maxHeight": 1200,
         "resizable": true,
         "fullscreen": false,
         "center": true,
