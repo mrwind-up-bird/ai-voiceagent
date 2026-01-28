@@ -730,6 +730,110 @@ const QUADRANT_CONFIG: Record<EisenhowerQuadrant, { label: string; color: string
   not_urgent_not_important: { label: 'Later', color: 'text-gray-400', bgColor: 'bg-gray-500/20' },
 };
 
+// Helper component to render translated brain dump with proper styling
+function TranslatedBrainDumpDisplay({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const sections: Array<{ type: 'summary' | 'header' | 'item' | 'empty'; content: string; headerType?: string }> = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      sections.push({ type: 'empty', content: '' });
+      continue;
+    }
+
+    // Check if it's a summary line (starts with "Summary:" or similar pattern in any language)
+    if (i === 0 || (trimmed.includes(':') && trimmed.split(':')[0].length < 20 && !trimmed.startsWith('[') && !/^\d+\./.test(trimmed))) {
+      const colonIndex = trimmed.indexOf(':');
+      if (colonIndex > 0 && colonIndex < 20) {
+        const beforeColon = trimmed.substring(0, colonIndex).toUpperCase();
+        // Check if it's a section header (TASKS, IDEAS, NOTES or translations)
+        if (trimmed.endsWith(':') || beforeColon.length < 15) {
+          if (/^\d+\./.test(trimmed)) {
+            // It's a numbered item
+            sections.push({ type: 'item', content: trimmed });
+          } else if (trimmed.endsWith(':')) {
+            // It's a section header like "TASKS:" or "AUFGABEN:"
+            sections.push({ type: 'header', content: trimmed.replace(/:$/, ''), headerType: beforeColon });
+          } else {
+            // It's a summary or similar
+            sections.push({ type: 'summary', content: trimmed });
+          }
+          continue;
+        }
+      }
+    }
+
+    // Check for numbered items
+    if (/^\d+\./.test(trimmed)) {
+      sections.push({ type: 'item', content: trimmed });
+      continue;
+    }
+
+    // Check for uppercase headers (like "TASKS", "IDEAS", "NOTES" in any language)
+    const isUpperCase = trimmed === trimmed.toUpperCase();
+    const isShort = trimmed.length < 30;
+    const endsWithColon = trimmed.endsWith(':');
+    if ((isUpperCase && isShort) || endsWithColon) {
+      sections.push({ type: 'header', content: trimmed.replace(/:$/, ''), headerType: trimmed.toUpperCase() });
+      continue;
+    }
+
+    // Default to item/content
+    sections.push({ type: 'item', content: trimmed });
+  }
+
+  // Header colors based on type
+  const getHeaderColor = (headerType?: string): string => {
+    if (!headerType) return 'text-voice-primary';
+    const upper = headerType.toUpperCase();
+    // Tasks/Aufgaben
+    if (upper.includes('TASK') || upper.includes('AUFGAB')) return 'text-red-400';
+    // Ideas/Ideen
+    if (upper.includes('IDEA') || upper.includes('IDEE')) return 'text-yellow-400';
+    // Notes/Notizen
+    if (upper.includes('NOTE') || upper.includes('NOTIZ')) return 'text-blue-400';
+    return 'text-voice-primary';
+  };
+
+  return (
+    <div className="p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50">
+      <div className="text-white text-sm leading-relaxed space-y-1">
+        {sections.map((section, i) => {
+          if (section.type === 'empty') {
+            return <div key={i} className="h-2" />;
+          }
+
+          if (section.type === 'summary') {
+            return (
+              <p key={i} className="text-gray-300 italic mb-2">{section.content}</p>
+            );
+          }
+
+          if (section.type === 'header') {
+            const color = getHeaderColor(section.headerType);
+            return (
+              <h4 key={i} className={`font-semibold ${color} mt-3 first:mt-0 uppercase text-xs tracking-wider`}>
+                {section.content}
+              </h4>
+            );
+          }
+
+          if (section.type === 'item') {
+            return (
+              <p key={i} className="pl-2 text-gray-200">{section.content}</p>
+            );
+          }
+
+          return null;
+        })}
+      </div>
+    </div>
+  );
+}
+
 function BrainDumpDisplay({
   result,
   streaming,
@@ -866,29 +970,7 @@ function BrainDumpDisplay({
 
       {/* Show translated text if available */}
       {translatedText ? (
-        <div className="p-3 bg-voice-surface/30 rounded-lg border border-voice-border/50">
-          <div className="text-white text-sm leading-relaxed">
-            {translatedText.split('\n').map((line, i) => {
-              const trimmed = line.trim();
-              const isHeader = trimmed === 'TASKS:' || trimmed === 'IDEAS:' || trimmed === 'NOTES:' || trimmed.startsWith('Summary:');
-              const isNumbered = /^\d+\./.test(trimmed);
-              const isEmpty = trimmed === '';
-              return (
-                <p
-                  key={i}
-                  className={`
-                    ${isEmpty ? 'h-2' : ''}
-                    ${isHeader ? 'font-semibold text-voice-primary mt-3 first:mt-0 uppercase text-xs tracking-wider' : ''}
-                    ${isNumbered ? 'pl-2 mt-1' : ''}
-                    ${!isHeader && !isNumbered && !isEmpty ? 'mt-1' : ''}
-                  `}
-                >
-                  {line || '\u00A0'}
-                </p>
-              );
-            })}
-          </div>
-        </div>
+        <TranslatedBrainDumpDisplay text={translatedText} />
       ) : result && (
         <>
           {/* Tabs */}
@@ -1024,6 +1106,127 @@ function BrainDumpDisplay({
   );
 }
 
+// Helper component to render translated letter with proper styling
+function TranslatedLetterDisplay({ text }: { text: string }) {
+  const lines = text.split('\n');
+  const sections: Array<{ type: 'title' | 'date' | 'section' | 'content' | 'divider' | 'disclaimer'; content: string; sectionIndex?: number }> = [];
+
+  let currentSectionIndex = -1;
+  let isAfterDivider = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      continue; // Skip empty lines
+    }
+
+    if (trimmed === '---') {
+      sections.push({ type: 'divider', content: '' });
+      isAfterDivider = true;
+      continue;
+    }
+
+    // After divider is the disclaimer
+    if (isAfterDivider) {
+      sections.push({ type: 'disclaimer', content: trimmed });
+      continue;
+    }
+
+    // First non-empty line is the title
+    if (sections.length === 0) {
+      sections.push({ type: 'title', content: trimmed });
+      continue;
+    }
+
+    // Second line (after title) is typically the date
+    if (sections.length === 1 && sections[0].type === 'title') {
+      sections.push({ type: 'date', content: trimmed });
+      continue;
+    }
+
+    // Detect section headers: uppercase, relatively short, no punctuation at end
+    const isUpperCase = trimmed === trimmed.toUpperCase();
+    const isShort = trimmed.length < 50;
+    const hasNoPunctuation = !/[.!?:,]$/.test(trimmed);
+    const isHeader = isUpperCase && isShort && hasNoPunctuation && trimmed.length > 2;
+
+    if (isHeader) {
+      currentSectionIndex++;
+      sections.push({ type: 'section', content: trimmed, sectionIndex: currentSectionIndex });
+    } else {
+      sections.push({ type: 'content', content: trimmed, sectionIndex: currentSectionIndex });
+    }
+  }
+
+  // Section colors based on index
+  const sectionColors = [
+    { bar: 'bg-pink-400', text: 'text-pink-300' },   // Reflection
+    { bar: 'bg-blue-400', text: 'text-blue-300' },   // Mental Check-in
+    { bar: 'bg-purple-400', text: 'text-purple-300' }, // The Release
+    { bar: 'bg-amber-400', text: 'text-amber-300' },  // Message to Tomorrow
+  ];
+
+  return (
+    <div className="relative bg-gradient-to-br from-pink-950/20 via-voice-surface/30 to-purple-950/20 rounded-xl border border-pink-500/20 overflow-hidden">
+      {/* Decorative corner */}
+      <div className="absolute top-0 right-0 w-16 h-16 bg-gradient-to-bl from-pink-500/10 to-transparent" />
+
+      <div className="px-5 py-4 space-y-4">
+        {sections.map((section, i) => {
+          if (section.type === 'title') {
+            return null; // Skip title, we show it in header
+          }
+
+          if (section.type === 'date') {
+            return (
+              <p key={i} className="text-xs text-gray-400 italic -mt-2">{section.content}</p>
+            );
+          }
+
+          if (section.type === 'section') {
+            const colorIdx = Math.min(section.sectionIndex || 0, sectionColors.length - 1);
+            const colors = sectionColors[colorIdx];
+            return (
+              <div key={i} className="flex items-center gap-2 mt-4 first:mt-0">
+                <div className={`w-1 h-4 ${colors.bar} rounded-full`} />
+                <h4 className={`text-xs font-semibold ${colors.text} uppercase tracking-wider`}>{section.content}</h4>
+              </div>
+            );
+          }
+
+          if (section.type === 'content') {
+            const isMessageToTomorrow = section.sectionIndex === 3;
+            return (
+              <p key={i} className={`text-sm text-gray-200 leading-relaxed pl-3 ${isMessageToTomorrow ? 'italic' : ''}`}>
+                {section.content}
+              </p>
+            );
+          }
+
+          if (section.type === 'divider') {
+            return <div key={i} className="border-t border-pink-500/20 my-2" />;
+          }
+
+          if (section.type === 'disclaimer') {
+            return (
+              <div key={i} className="mt-2 pt-3 border-t border-pink-500/10">
+                <p className="text-[10px] text-gray-500 leading-relaxed">
+                  <ShieldIcon className="w-3 h-3 inline mr-1 opacity-50" />
+                  {section.content}
+                </p>
+              </div>
+            );
+          }
+
+          return null;
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MentalMirrorDisplay({
   result,
   streaming,
@@ -1137,33 +1340,9 @@ ${result.disclaimer}`;
         </div>
       </div>
 
-      {/* Show translated text if available */}
+      {/* Show translated text if available - with styled sections */}
       {translatedText ? (
-        <div className="p-4 bg-gradient-to-br from-pink-950/20 via-voice-surface/30 to-purple-950/20 rounded-xl border border-pink-500/20">
-          <div className="text-white text-sm leading-relaxed">
-            {translatedText.split('\n').map((line, i) => {
-              const trimmed = line.trim();
-              const isHeader = ['LETTER TO MY FUTURE SELF', 'REFLECTION', 'MENTAL CHECK-IN', 'THE RELEASE', 'MESSAGE TO TOMORROW'].includes(trimmed);
-              const isDate = trimmed.includes(',') && (trimmed.includes('January') || trimmed.includes('February') || trimmed.includes('March') || trimmed.includes('April') || trimmed.includes('May') || trimmed.includes('June') || trimmed.includes('July') || trimmed.includes('August') || trimmed.includes('September') || trimmed.includes('October') || trimmed.includes('November') || trimmed.includes('December'));
-              const isDivider = trimmed === '---';
-              const isEmpty = trimmed === '';
-              return (
-                <p
-                  key={i}
-                  className={`
-                    ${isEmpty ? 'h-3' : ''}
-                    ${isHeader ? 'font-semibold text-pink-300 mt-4 first:mt-0 text-sm tracking-wide' : ''}
-                    ${isDate ? 'text-gray-400 text-xs italic mb-2' : ''}
-                    ${isDivider ? 'border-t border-pink-500/20 my-4' : ''}
-                    ${!isHeader && !isDate && !isDivider && !isEmpty ? 'mt-1' : ''}
-                  `}
-                >
-                  {isDivider ? null : line || '\u00A0'}
-                </p>
-              );
-            })}
-          </div>
-        </div>
+        <TranslatedLetterDisplay text={translatedText} />
       ) : result && (
         <div className="space-y-0">
           {/* Letter Card */}

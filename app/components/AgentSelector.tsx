@@ -21,12 +21,13 @@ const agents: Array<{
     description: 'Rewrite in different tones',
     icon: <ToneIcon />,
   },
-  {
-    id: 'music-matcher',
-    name: 'Music Matcher',
-    description: 'Find matching music',
-    icon: <MusicIcon />,
-  },
+  // Music Matcher disabled - backend functions available for future implementation
+  // {
+  //   id: 'music-matcher',
+  //   name: 'Music Matcher',
+  //   description: 'Find matching music',
+  //   icon: <MusicIcon />,
+  // },
   {
     id: 'translator',
     name: 'Translator',
