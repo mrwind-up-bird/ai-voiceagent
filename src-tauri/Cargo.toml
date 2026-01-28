@@ -1,0 +1,37 @@
+[package]
+name = "aurus-voice-intelligence"
+version = "0.1.0"
+description = "Voice Intelligence Hub - Desktop Voice Assistant"
+authors = ["Voice Intelligence Hub"]
+edition = "2021"
+
+[lib]
+name = "voice_intelligence_hub_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+tauri-plugin-global-shortcut = "2"
+dirs = "5"
+once_cell = "1"
+whisper-rs = "0.14"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+cpal = "0.15"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+async-tungstenite = { version = "0.26", features = ["tokio-runtime", "tokio-native-tls"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+strip = true
+lto = true

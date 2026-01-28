@@ -1,0 +1,95 @@
+pub mod agents;
+pub mod audio;
+pub mod secrets;
+pub mod transcription;
+
+use std::sync::Arc;
+use tauri::Manager;
+use transcription::TranscriptionManager;
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tracing_subscriber::fmt::init();
+
+    tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .setup(|app| {
+            // Initialize transcription state
+            let transcription_state: TranscriptionManager =
+                Arc::new(tokio::sync::Mutex::new(transcription::TranscriptionState::default()));
+            app.manage(transcription_state);
+
+            tracing::info!("API keys stored in OS keychain (macOS Keychain / Windows Credential Manager)");
+
+            // Register global shortcut (Cmd+Shift+V for Voice)
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+
+                let shortcut = Shortcut::new(
+                    Some(Modifiers::SUPER | Modifiers::SHIFT),
+                    Code::KeyV,
+                );
+
+                let app_handle = app.handle().clone();
+
+                if let Err(e) = app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
+                    // Only handle key press, not key release
+                    if event.state != ShortcutState::Pressed {
+                        return;
+                    }
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        if window.is_visible().unwrap_or(false) {
+                            let _ = window.hide();
+                        } else {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.center();
+                        }
+                    }
+                }) {
+                    tracing::warn!("Failed to set shortcut handler: {}", e);
+                }
+
+                if let Err(e) = app.global_shortcut().register(shortcut) {
+                    tracing::warn!("Failed to register global shortcut Cmd+Shift+V: {}", e);
+                    // App will still work, just without the global shortcut
+                }
+            }
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // Secrets commands
+            secrets::set_api_key,
+            secrets::get_api_key,
+            secrets::delete_api_key,
+            secrets::has_api_keys,
+            // Audio commands
+            audio::start_recording,
+            audio::stop_recording,
+            audio::is_recording,
+            audio::list_audio_devices,
+            // Transcription commands
+            transcription::start_deepgram_stream,
+            transcription::stop_deepgram_stream,
+            transcription::send_audio_to_deepgram,
+            transcription::is_deepgram_streaming,
+            transcription::transcribe_with_assemblyai,
+            transcription::transcribe_local_whisper,
+            // Action Items agent
+            agents::action_items::extract_action_items,
+            agents::action_items::extract_action_items_streaming,
+            // Tone Shifter agent
+            agents::tone_shifter::shift_tone,
+            agents::tone_shifter::shift_tone_streaming,
+            agents::tone_shifter::get_available_tones,
+            // Music Matcher agent
+            agents::music_matcher::match_music,
+            agents::music_matcher::analyze_mood_from_transcript,
+            agents::music_matcher::get_available_moods,
+            agents::music_matcher::get_available_genres,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}

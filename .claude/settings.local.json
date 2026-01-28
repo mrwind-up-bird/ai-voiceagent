@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(pnpm install:*)",
+      "Bash(pnpm test:*)",
+      "Bash(npx vitest:*)",
+      "Bash(timeout 15s pnpm dev:*)",
+      "Bash(pkill:*)",
+      "Bash(cargo check:*)",
+      "Bash(convert:*)",
+      "Bash(magick:*)",
+      "Bash(pnpm tauri:*)",
+      "Bash(~/.cargo/bin/cargo check)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "Bash(brew install:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm build:*)",
+      "Bash(cargo build:*)",
+      "Bash(security find-generic-password -s \"voice-intelligence-hub\" -a \"deepgram\")",
+      "Bash(security dump-keychain:*)",
+      "Bash(security find-generic-password -s \"voice-intelligence-hub\")",
+      "Bash(cargo clippy:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

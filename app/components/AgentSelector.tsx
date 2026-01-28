@@ -1,0 +1,160 @@
+'use client';
+
+import { useCallback } from 'react';
+import { useVoiceStore, AgentType } from '../store/voiceStore';
+
+const agents: Array<{
+  id: AgentType;
+  name: string;
+  description: string;
+  icon: React.ReactNode;
+}> = [
+  {
+    id: 'action-items',
+    name: 'Action Items',
+    description: 'Extract tasks and commitments',
+    icon: <ChecklistIcon />,
+  },
+  {
+    id: 'tone-shifter',
+    name: 'Tone Shifter',
+    description: 'Rewrite in different tones',
+    icon: <ToneIcon />,
+  },
+  {
+    id: 'music-matcher',
+    name: 'Music Matcher',
+    description: 'Find matching music',
+    icon: <MusicIcon />,
+  },
+];
+
+export function AgentSelector() {
+  const { activeAgent, setActiveAgent, transcript, isProcessing, setProcessing, setError } = useVoiceStore();
+
+  const runAgent = useCallback(
+    async (agentId: AgentType) => {
+      if (!agentId || !transcript || isProcessing) return;
+
+      setActiveAgent(agentId);
+      setProcessing(true, `Running ${agentId}...`);
+
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+
+        // Get API keys
+        const openaiKey = await invoke<string | null>('get_api_key', { keyType: 'openai' });
+        const anthropicKey = await invoke<string | null>('get_api_key', { keyType: 'anthropic' });
+
+        switch (agentId) {
+          case 'action-items':
+            if (!openaiKey) {
+              throw new Error('OpenAI API key required for Action Items');
+            }
+            await invoke('extract_action_items', {
+              apiKey: openaiKey,
+              transcript,
+            });
+            break;
+
+          case 'tone-shifter':
+            if (!anthropicKey) {
+              throw new Error('Anthropic API key required for Tone Shifter');
+            }
+            const { selectedTone } = useVoiceStore.getState();
+            await invoke('shift_tone_streaming', {
+              apiKey: anthropicKey,
+              text: transcript,
+              targetTone: selectedTone,
+            });
+            break;
+
+          case 'music-matcher':
+            if (!openaiKey) {
+              throw new Error('OpenAI API key required for Music Matcher');
+            }
+            // First analyze mood, then match music
+            await invoke('analyze_mood_from_transcript', {
+              openaiKey,
+              transcript,
+            });
+            const qrecordsKey = await invoke<string | null>('get_api_key', { keyType: 'qrecords' });
+            if (qrecordsKey) {
+              await invoke('match_music', {
+                apiKey: qrecordsKey,
+                request: { query: transcript },
+              });
+            }
+            break;
+        }
+      } catch (error) {
+        console.error('Agent error:', error);
+        setError(error instanceof Error ? error.message : 'Agent failed');
+        setProcessing(false);
+      }
+    },
+    [transcript, isProcessing, setActiveAgent, setProcessing, setError]
+  );
+
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      {agents.map((agent) => (
+        <button
+          key={agent.id}
+          onClick={() => runAgent(agent.id)}
+          disabled={!transcript || isProcessing}
+          className={`
+            flex items-center gap-2 px-3 py-2 rounded-lg
+            text-sm font-medium transition-all duration-200
+            disabled:opacity-50 disabled:cursor-not-allowed
+            ${
+              activeAgent === agent.id
+                ? 'bg-voice-primary text-white'
+                : 'bg-voice-surface text-gray-300 hover:bg-voice-border hover:text-white'
+            }
+          `}
+          title={agent.description}
+        >
+          <span className="w-4 h-4">{agent.icon}</span>
+          <span>{agent.name}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function ChecklistIcon() {
+  return (
+    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"
+      />
+    </svg>
+  );
+}
+
+function ToneIcon() {
+  return (
+    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"
+      />
+    </svg>
+  );
+}
+
+function MusicIcon() {
+  return (
+    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+      />
+    </svg>
+  );
+}
