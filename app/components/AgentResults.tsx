@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useVoiceStore, ActionItem, Track, TranslationResult } from '../store/voiceStore';
+import { useVoiceStore, ActionItem, Track, TranslationResult, DevLogResult, BrainDumpResult, BrainDumpTask, EisenhowerQuadrant } from '../store/voiceStore';
 
 const LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -145,6 +145,10 @@ export function AgentResults() {
     moodAnalysis,
     translationResult,
     translationStreaming,
+    devLogResult,
+    devLogStreaming,
+    brainDumpResult,
+    brainDumpStreaming,
     isProcessing,
     processingMessage,
   } = useVoiceStore();
@@ -156,7 +160,7 @@ export function AgentResults() {
   return (
     <div className="w-full">
       <div className="glass rounded-lg p-4">
-        {isProcessing && activeAgent !== 'tone-shifter' && activeAgent !== 'translator' && activeAgent !== 'action-items' && (
+        {isProcessing && activeAgent !== 'tone-shifter' && activeAgent !== 'translator' && activeAgent !== 'action-items' && activeAgent !== 'dev-log' && activeAgent !== 'brain-dump' && (
           <div className="flex items-center gap-3 text-gray-400">
             <LoadingSpinner />
             <span className="text-sm">{processingMessage || 'Processing...'}</span>
@@ -183,6 +187,22 @@ export function AgentResults() {
           <TranslationDisplay
             result={translationResult}
             streaming={translationStreaming}
+            isProcessing={isProcessing}
+          />
+        )}
+
+        {activeAgent === 'dev-log' && (
+          <DevLogDisplay
+            result={devLogResult}
+            streaming={devLogStreaming}
+            isProcessing={isProcessing}
+          />
+        )}
+
+        {activeAgent === 'brain-dump' && (
+          <BrainDumpDisplay
+            result={brainDumpResult}
+            streaming={brainDumpStreaming}
             isProcessing={isProcessing}
           />
         )}
@@ -535,6 +555,426 @@ function TranslationDisplay({
   );
 }
 
+function DevLogDisplay({
+  result,
+  streaming,
+  isProcessing,
+}: {
+  result: DevLogResult | null;
+  streaming: string;
+  isProcessing: boolean;
+}) {
+  const { copied: copiedCommit, copy: copyCommit } = useCopyToClipboard();
+  const { copied: copiedTicket, copy: copyTicket } = useCopyToClipboard();
+  const { copied: copiedSlack, copy: copySlack } = useCopyToClipboard();
+  const { isSpeaking, speak, stop } = useTextToSpeech();
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
+  const showBlur = isProcessing;
+
+  if (!result && !isProcessing) {
+    return null;
+  }
+
+  if (isProcessing && !result) {
+    return (
+      <div className="flex items-center gap-3 text-gray-400">
+        <LoadingSpinner />
+        <span className="text-sm">Generating dev documentation...</span>
+      </div>
+    );
+  }
+
+  const toggleSection = (section: string) => {
+    setExpandedSection(expandedSection === section ? null : section);
+  };
+
+  const formatTicketForCopy = () => {
+    if (!result) return '';
+    return `# ${result.ticket.title}\n\n## Description\n${result.ticket.description}\n\n## Acceptance Criteria\n${result.ticket.acceptance_criteria.map(ac => `- [ ] ${ac}`).join('\n')}`;
+  };
+
+  const speakAll = () => {
+    if (!result) return;
+    const fullText = `Commit message: ${result.commit_message}. Ticket: ${result.ticket.title}. ${result.ticket.description}. Slack update: ${result.slack_update}`;
+    speak(fullText);
+  };
+
+  return (
+    <div className={`transition-all duration-300 ${showBlur ? 'blur-[2px] select-none' : 'blur-0'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          Dev Documentation
+        </h3>
+        <div className="flex items-center gap-1">
+          <SpeakButton isSpeaking={isSpeaking} onSpeak={speakAll} onStop={stop} />
+        </div>
+      </div>
+
+      {result && (
+        <div className="space-y-4">
+          {/* Commit Message */}
+          <div className="border border-voice-border rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggleSection('commit')}
+              className="w-full flex items-center justify-between px-3 py-2 bg-voice-surface/50 hover:bg-voice-surface transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <GitCommitIcon className="w-4 h-4 text-green-500" />
+                <span className="text-sm font-medium text-white">Commit Message</span>
+              </div>
+              <ChevronIcon className={`w-4 h-4 text-gray-400 transition-transform ${expandedSection === 'commit' ? 'rotate-180' : ''}`} />
+            </button>
+            {expandedSection === 'commit' && (
+              <div className="p-3 border-t border-voice-border">
+                <div className="flex items-start justify-between gap-2">
+                  <pre className="text-sm text-white whitespace-pre-wrap font-mono flex-1">{result.commit_message}</pre>
+                  <CopyButton copied={copiedCommit} onClick={() => copyCommit(result.commit_message)} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Jira/Linear Ticket */}
+          <div className="border border-voice-border rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggleSection('ticket')}
+              className="w-full flex items-center justify-between px-3 py-2 bg-voice-surface/50 hover:bg-voice-surface transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <TicketIcon className="w-4 h-4 text-blue-500" />
+                <span className="text-sm font-medium text-white">Jira/Linear Ticket</span>
+              </div>
+              <ChevronIcon className={`w-4 h-4 text-gray-400 transition-transform ${expandedSection === 'ticket' ? 'rotate-180' : ''}`} />
+            </button>
+            {expandedSection === 'ticket' && (
+              <div className="p-3 border-t border-voice-border">
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <h4 className="text-sm font-semibold text-white">{result.ticket.title}</h4>
+                  <CopyButton copied={copiedTicket} onClick={() => copyTicket(formatTicketForCopy())} />
+                </div>
+                <p className="text-sm text-gray-300 mb-3">{result.ticket.description}</p>
+                <div>
+                  <span className="text-xs font-medium text-gray-400 uppercase tracking-wider">Acceptance Criteria</span>
+                  <ul className="mt-2 space-y-1">
+                    {result.ticket.acceptance_criteria.map((ac, i) => (
+                      <li key={i} className="flex items-start gap-2 text-sm text-gray-300">
+                        <span className="text-green-500 mt-0.5">•</span>
+                        <span>{ac}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Slack Update */}
+          <div className="border border-voice-border rounded-lg overflow-hidden">
+            <button
+              onClick={() => toggleSection('slack')}
+              className="w-full flex items-center justify-between px-3 py-2 bg-voice-surface/50 hover:bg-voice-surface transition-colors"
+            >
+              <div className="flex items-center gap-2">
+                <SlackIcon className="w-4 h-4 text-purple-500" />
+                <span className="text-sm font-medium text-white">Slack Update</span>
+              </div>
+              <ChevronIcon className={`w-4 h-4 text-gray-400 transition-transform ${expandedSection === 'slack' ? 'rotate-180' : ''}`} />
+            </button>
+            {expandedSection === 'slack' && (
+              <div className="p-3 border-t border-voice-border">
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm text-white flex-1">{result.slack_update}</p>
+                  <CopyButton copied={copiedSlack} onClick={() => copySlack(result.slack_update)} />
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const QUADRANT_CONFIG: Record<EisenhowerQuadrant, { label: string; color: string; bgColor: string }> = {
+  urgent_important: { label: 'Do First', color: 'text-red-400', bgColor: 'bg-red-500/20' },
+  not_urgent_important: { label: 'Schedule', color: 'text-blue-400', bgColor: 'bg-blue-500/20' },
+  urgent_not_important: { label: 'Delegate', color: 'text-amber-400', bgColor: 'bg-amber-500/20' },
+  not_urgent_not_important: { label: 'Later', color: 'text-gray-400', bgColor: 'bg-gray-500/20' },
+};
+
+function BrainDumpDisplay({
+  result,
+  streaming,
+  isProcessing,
+}: {
+  result: BrainDumpResult | null;
+  streaming: string;
+  isProcessing: boolean;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+  const { isSpeaking, speak, stop } = useTextToSpeech();
+  const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+  const [activeTab, setActiveTab] = useState<'tasks' | 'ideas' | 'notes'>('tasks');
+
+  const formatForText = (): string => {
+    if (!result) return '';
+
+    let text = `Summary: ${result.summary}\n\n`;
+
+    if (result.tasks.length > 0) {
+      text += 'TASKS:\n';
+      result.tasks.forEach((task, i) => {
+        const quadrant = QUADRANT_CONFIG[task.quadrant];
+        text += `${i + 1}. [${quadrant.label}] ${task.title}: ${task.description}`;
+        if (task.due_hint) text += ` (${task.due_hint})`;
+        text += '\n';
+      });
+      text += '\n';
+    }
+
+    if (result.creative_ideas.length > 0) {
+      text += 'IDEAS:\n';
+      result.creative_ideas.forEach((idea, i) => {
+        text += `${i + 1}. ${idea.title}: ${idea.description}\n`;
+      });
+      text += '\n';
+    }
+
+    if (result.notes.length > 0) {
+      text += 'NOTES:\n';
+      result.notes.forEach((note, i) => {
+        text += `${i + 1}. ${note.content}\n`;
+      });
+    }
+
+    return text;
+  };
+
+  const originalText = result ? formatForText() : null;
+
+  const {
+    targetLanguage,
+    setTargetLanguage,
+    translatedText,
+    isTranslating,
+    clearTranslation,
+  } = useOutputTranslation(originalText);
+
+  const showBlur = isProcessing || isTranslating;
+
+  if (!result && !isProcessing) {
+    return null;
+  }
+
+  if (isProcessing && !result) {
+    return (
+      <div className="flex items-center gap-3 text-gray-400">
+        <LoadingSpinner />
+        <span className="text-sm">Processing brain dump...</span>
+      </div>
+    );
+  }
+
+  const tasksByQuadrant: Partial<Record<EisenhowerQuadrant, BrainDumpTask[]>> = result?.tasks.reduce((acc, task) => {
+    if (!acc[task.quadrant]) acc[task.quadrant] = [];
+    acc[task.quadrant]!.push(task);
+    return acc;
+  }, {} as Partial<Record<EisenhowerQuadrant, BrainDumpTask[]>>) || {};
+
+  const speakAll = () => {
+    const text = translatedText || formatForText();
+    speak(text);
+  };
+
+  return (
+    <div className={`transition-all duration-300 ${showBlur ? 'blur-[2px] select-none' : 'blur-0'}`}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          Brain Dump
+          {targetLanguage && (
+            <span className="ml-2 normal-case text-voice-primary">
+              → {LANGUAGES.find(l => l.code === targetLanguage)?.name}
+            </span>
+          )}
+        </h3>
+        <div className="flex items-center gap-1">
+          <SpeakButton isSpeaking={isSpeaking} onSpeak={speakAll} onStop={stop} />
+          <div className="relative">
+            <button
+              onClick={() => setShowLanguageMenu(!showLanguageMenu)}
+              className={`p-1 transition-colors rounded ${
+                targetLanguage ? 'text-voice-primary' : 'text-gray-500 hover:text-white'
+              }`}
+              title="Translate"
+              disabled={isProcessing}
+            >
+              <TranslateIcon className="w-4 h-4" />
+            </button>
+            {showLanguageMenu && !isProcessing && (
+              <LanguageMenu
+                currentLanguage={targetLanguage}
+                onSelect={(lang) => {
+                  if (lang === targetLanguage) {
+                    clearTranslation();
+                  } else {
+                    setTargetLanguage(lang);
+                  }
+                  setShowLanguageMenu(false);
+                }}
+                onClose={() => setShowLanguageMenu(false)}
+              />
+            )}
+          </div>
+          <CopyButton copied={copied} onClick={() => copy(translatedText || formatForText())} />
+        </div>
+      </div>
+
+      {/* Summary */}
+      {result?.summary && (
+        <div className="mb-4 p-3 bg-voice-surface/50 rounded-lg">
+          <p className="text-sm text-gray-300 italic">{result.summary}</p>
+        </div>
+      )}
+
+      {/* Show translated text if available */}
+      {translatedText ? (
+        <div className="text-white text-sm whitespace-pre-line">{translatedText}</div>
+      ) : result && (
+        <>
+          {/* Tabs */}
+          <div className="flex gap-1 mb-4 border-b border-voice-border">
+            <button
+              onClick={() => setActiveTab('tasks')}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === 'tasks'
+                  ? 'border-voice-primary text-voice-primary'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              Tasks ({result.tasks.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('ideas')}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === 'ideas'
+                  ? 'border-voice-primary text-voice-primary'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              Ideas ({result.creative_ideas.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('notes')}
+              className={`px-3 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                activeTab === 'notes'
+                  ? 'border-voice-primary text-voice-primary'
+                  : 'border-transparent text-gray-400 hover:text-white'
+              }`}
+            >
+              Notes ({result.notes.length})
+            </button>
+          </div>
+
+          {/* Tasks Tab - Eisenhower Matrix */}
+          {activeTab === 'tasks' && (
+            <div className="space-y-3">
+              {result.tasks.length === 0 ? (
+                <p className="text-gray-400 text-sm">No tasks identified.</p>
+              ) : (
+                <>
+                  {/* Group by quadrant */}
+                  {(['urgent_important', 'not_urgent_important', 'urgent_not_important', 'not_urgent_not_important'] as EisenhowerQuadrant[]).map((quadrant) => {
+                    const tasks = tasksByQuadrant[quadrant] || [];
+                    if (tasks.length === 0) return null;
+                    const config = QUADRANT_CONFIG[quadrant];
+                    return (
+                      <div key={quadrant} className="space-y-2">
+                        <div className={`inline-flex items-center gap-2 px-2 py-1 rounded ${config.bgColor}`}>
+                          <span className={`text-xs font-medium ${config.color}`}>{config.label}</span>
+                          <span className="text-xs text-gray-500">({tasks.length})</span>
+                        </div>
+                        <ul className="space-y-2 ml-2">
+                          {tasks.map((task, i) => (
+                            <li key={i} className="flex gap-3 p-2 rounded bg-voice-surface/30">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-white text-sm font-medium">{task.title}</p>
+                                <p className="text-gray-400 text-xs mt-1">{task.description}</p>
+                                {task.due_hint && (
+                                  <span className="inline-block mt-1 text-xs text-amber-400">
+                                    {task.due_hint}
+                                  </span>
+                                )}
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Ideas Tab */}
+          {activeTab === 'ideas' && (
+            <div className="space-y-3">
+              {result.creative_ideas.length === 0 ? (
+                <p className="text-gray-400 text-sm">No creative ideas identified.</p>
+              ) : (
+                result.creative_ideas.map((idea, i) => (
+                  <div key={i} className="p-3 rounded-lg bg-voice-surface/30 border border-voice-border">
+                    <div className="flex items-start gap-2">
+                      <LightbulbIcon className="w-4 h-4 text-yellow-400 mt-0.5 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-white text-sm font-medium">{idea.title}</p>
+                        <p className="text-gray-400 text-xs mt-1">{idea.description}</p>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          {idea.category && (
+                            <span className="px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded text-xs">
+                              {idea.category}
+                            </span>
+                          )}
+                          {idea.potential && (
+                            <span className="text-xs text-gray-500 italic">{idea.potential}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+
+          {/* Notes Tab */}
+          {activeTab === 'notes' && (
+            <div className="space-y-3">
+              {result.notes.length === 0 ? (
+                <p className="text-gray-400 text-sm">No notes identified.</p>
+              ) : (
+                result.notes.map((note, i) => (
+                  <div key={i} className="p-3 rounded-lg bg-voice-surface/30">
+                    <p className="text-white text-sm">{note.content}</p>
+                    {note.tags.length > 0 && (
+                      <div className="flex flex-wrap gap-1 mt-2">
+                        {note.tags.map((tag, j) => (
+                          <span key={j} className="text-xs text-gray-500">#{tag}</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function LanguageMenu({
   currentLanguage,
   onSelect,
@@ -697,6 +1137,59 @@ function StopCircleIcon({ className }: { className?: string }) {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"
+      />
+    </svg>
+  );
+}
+
+function GitCommitIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <circle cx="12" cy="12" r="3" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v6m0 6v6" />
+    </svg>
+  );
+}
+
+function TicketIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z"
+      />
+    </svg>
+  );
+}
+
+function SlackIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"
+      />
+    </svg>
+  );
+}
+
+function ChevronIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+    </svg>
+  );
+}
+
+function LightbulbIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
       />
     </svg>
   );

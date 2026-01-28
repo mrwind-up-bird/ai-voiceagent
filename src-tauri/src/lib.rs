@@ -100,6 +100,12 @@ pub fn run() {
             agents::translator::translate_text,
             agents::translator::translate_text_streaming,
             agents::translator::get_available_languages,
+            // Dev-Log agent
+            agents::dev_log::generate_dev_log,
+            agents::dev_log::generate_dev_log_streaming,
+            // Brain Dump agent
+            agents::brain_dump::process_brain_dump,
+            agents::brain_dump::process_brain_dump_streaming,
             // Text-to-Speech
             tts::speak_text,
             tts::stop_speech,

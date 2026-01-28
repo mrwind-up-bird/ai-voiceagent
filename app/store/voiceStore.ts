@@ -48,7 +48,45 @@ export interface LanguageOption {
   isSource: boolean;
 }
 
-export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | null;
+export interface DevLogResult {
+  commit_message: string;
+  ticket: {
+    title: string;
+    description: string;
+    acceptance_criteria: string[];
+  };
+  slack_update: string;
+}
+
+export type EisenhowerQuadrant = 'urgent_important' | 'not_urgent_important' | 'urgent_not_important' | 'not_urgent_not_important';
+
+export interface BrainDumpTask {
+  title: string;
+  description: string;
+  quadrant: EisenhowerQuadrant;
+  due_hint: string | null;
+}
+
+export interface BrainDumpIdea {
+  title: string;
+  description: string;
+  category: string | null;
+  potential: string | null;
+}
+
+export interface BrainDumpNote {
+  content: string;
+  tags: string[];
+}
+
+export interface BrainDumpResult {
+  tasks: BrainDumpTask[];
+  creative_ideas: BrainDumpIdea[];
+  notes: BrainDumpNote[];
+  summary: string;
+}
+
+export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | 'dev-log' | 'brain-dump' | null;
 export type RecordingState = 'idle' | 'recording' | 'processing';
 
 interface VoiceState {
@@ -103,6 +141,20 @@ interface VoiceState {
   setSelectedSourceLanguage: (lang: string) => void;
   setSelectedTargetLanguage: (lang: string) => void;
 
+  // Dev-Log
+  devLogResult: DevLogResult | null;
+  devLogStreaming: string;
+  setDevLogResult: (result: DevLogResult | null) => void;
+  appendDevLogStreaming: (text: string) => void;
+  clearDevLogStreaming: () => void;
+
+  // Brain Dump
+  brainDumpResult: BrainDumpResult | null;
+  brainDumpStreaming: string;
+  setBrainDumpResult: (result: BrainDumpResult | null) => void;
+  appendBrainDumpStreaming: (text: string) => void;
+  clearBrainDumpStreaming: () => void;
+
   // Processing state
   isProcessing: boolean;
   processingMessage: string;
@@ -142,6 +194,10 @@ const initialState = {
   translationStreaming: '',
   selectedSourceLanguage: 'auto',
   selectedTargetLanguage: 'en',
+  devLogResult: null,
+  devLogStreaming: '',
+  brainDumpResult: null,
+  brainDumpStreaming: '',
   isProcessing: false,
   processingMessage: '',
   error: null,
@@ -204,6 +260,20 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   setSelectedSourceLanguage: (lang) => set({ selectedSourceLanguage: lang }),
 
   setSelectedTargetLanguage: (lang) => set({ selectedTargetLanguage: lang }),
+
+  setDevLogResult: (result) => set({ devLogResult: result }),
+
+  appendDevLogStreaming: (text) =>
+    set((state) => ({ devLogStreaming: state.devLogStreaming + text })),
+
+  clearDevLogStreaming: () => set({ devLogStreaming: '' }),
+
+  setBrainDumpResult: (result) => set({ brainDumpResult: result }),
+
+  appendBrainDumpStreaming: (text) =>
+    set((state) => ({ brainDumpStreaming: state.brainDumpStreaming + text })),
+
+  clearBrainDumpStreaming: () => set({ brainDumpStreaming: '' }),
 
   setProcessing: (isProcessing, message = '') =>
     set({ isProcessing, processingMessage: message }),

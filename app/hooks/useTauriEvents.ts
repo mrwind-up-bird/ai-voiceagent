@@ -54,6 +54,46 @@ interface TranslationResultPayload {
   detected_language: string | null;
 }
 
+interface DevLogChunkPayload {
+  text: string;
+  is_complete: boolean;
+}
+
+interface DevLogResultPayload {
+  commit_message: string;
+  ticket: {
+    title: string;
+    description: string;
+    acceptance_criteria: string[];
+  };
+  slack_update: string;
+}
+
+interface BrainDumpChunkPayload {
+  text: string;
+  is_complete: boolean;
+}
+
+interface BrainDumpResultPayload {
+  tasks: Array<{
+    title: string;
+    description: string;
+    quadrant: 'urgent_important' | 'not_urgent_important' | 'urgent_not_important' | 'not_urgent_not_important';
+    due_hint: string | null;
+  }>;
+  creative_ideas: Array<{
+    title: string;
+    description: string;
+    category: string | null;
+    potential: string | null;
+  }>;
+  notes: Array<{
+    content: string;
+    tags: string[];
+  }>;
+  summary: string;
+}
+
 interface MusicMatchPayload {
   tracks: Array<{
     id: string;
@@ -91,6 +131,12 @@ export function useTauriEvents() {
     setTranslationResult,
     appendTranslationStreaming,
     clearTranslationStreaming,
+    setDevLogResult,
+    appendDevLogStreaming,
+    clearDevLogStreaming,
+    setBrainDumpResult,
+    appendBrainDumpStreaming,
+    clearBrainDumpStreaming,
     setProcessing,
     setError,
   } = useVoiceStore();
@@ -258,6 +304,58 @@ export function useTauriEvents() {
           }
         );
         listeners.push(unlistenTranslationComplete);
+
+        // Dev-Log events
+        const unlistenDevLogStarted = await listen('dev-log-started', () => {
+          clearDevLogStreaming();
+          setProcessing(true, 'Generating dev documentation...');
+        });
+        listeners.push(unlistenDevLogStarted);
+
+        const unlistenDevLogChunk = await listen<DevLogChunkPayload>(
+          'dev-log-chunk',
+          (event: TauriEvent<DevLogChunkPayload>) => {
+            if (!event.payload.is_complete) {
+              appendDevLogStreaming(event.payload.text);
+            }
+          }
+        );
+        listeners.push(unlistenDevLogChunk);
+
+        const unlistenDevLogComplete = await listen<DevLogResultPayload>(
+          'dev-log-complete',
+          (event: TauriEvent<DevLogResultPayload>) => {
+            setDevLogResult(event.payload);
+            setProcessing(false);
+          }
+        );
+        listeners.push(unlistenDevLogComplete);
+
+        // Brain Dump events
+        const unlistenBrainDumpStarted = await listen('brain-dump-started', () => {
+          clearBrainDumpStreaming();
+          setProcessing(true, 'Processing brain dump...');
+        });
+        listeners.push(unlistenBrainDumpStarted);
+
+        const unlistenBrainDumpChunk = await listen<BrainDumpChunkPayload>(
+          'brain-dump-chunk',
+          (event: TauriEvent<BrainDumpChunkPayload>) => {
+            if (!event.payload.is_complete) {
+              appendBrainDumpStreaming(event.payload.text);
+            }
+          }
+        );
+        listeners.push(unlistenBrainDumpChunk);
+
+        const unlistenBrainDumpComplete = await listen<BrainDumpResultPayload>(
+          'brain-dump-complete',
+          (event: TauriEvent<BrainDumpResultPayload>) => {
+            setBrainDumpResult(event.payload);
+            setProcessing(false);
+          }
+        );
+        listeners.push(unlistenBrainDumpComplete);
       } catch (error) {
         // Running outside Tauri (e.g., in browser dev mode)
         console.log('Tauri events not available:', error);
@@ -284,6 +382,12 @@ export function useTauriEvents() {
     setTranslationResult,
     appendTranslationStreaming,
     clearTranslationStreaming,
+    setDevLogResult,
+    appendDevLogStreaming,
+    clearDevLogStreaming,
+    setBrainDumpResult,
+    appendBrainDumpStreaming,
+    clearBrainDumpStreaming,
     setProcessing,
     setError,
   ]);

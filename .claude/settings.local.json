@@ -24,7 +24,10 @@
       "Bash(security find-generic-password -s \"voice-intelligence-hub\")",
       "Bash(cargo clippy:*)",
       "Bash(grep:*)",
-      "Bash(pnpm add:*)"
+      "Bash(pnpm add:*)",
+      "Bash(npx tsc:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nfeat\\(tone-shifter\\): add length control, blur effects, and output translation\n\nTone Shifter Enhancements:\n- Add output length adjustment slider \\(-50% to +100%\\)\n- Length guidance in AI prompt: shorter, same, longer output options\n- Auto-rerun when intensity or length sliders change \\(debounced 500ms\\)\n- Fix intensity slider not triggering re-run \\(track refs properly\\)\n- Fix slider thumb visibility \\(use emerald-500 for length slider\\)\n\nOutput Translation Feature:\n- Add translate button with language dropdown to Tone Shifter results\n- Add translate button with language dropdown to Action Items results\n- Auto-retranslate when language selection changes\n- Show translation indicator in header \\(e.g., \"→ German\"\\)\n- Click selected language to clear translation\n\nBlur Effects:\n- Blur output text during generation \\(2px blur, smooth transition\\)\n- Blur during translation requests\n- Prevents visual artifacts from streaming text\n- Applied to Tone Shifter, Translation, and Action Items displays\n\nTechnical:\n- New useOutputTranslation hook for reusable translation logic\n- LanguageMenu component with click-outside-to-close\n- Increased max_tokens to 4096 for longer outputs\n- Store toneLengthAdjustment state \\(default: 0, range: -50 to 100\\)\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
     ]
   }
 }
