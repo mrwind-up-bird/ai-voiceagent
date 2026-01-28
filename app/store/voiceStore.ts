@@ -34,13 +34,31 @@ export interface MoodAnalysis {
   keywords: string[];
 }
 
-export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | null;
+export interface TranslationResult {
+  original: string;
+  translated: string;
+  source_language: string;
+  target_language: string;
+  detected_language: string | null;
+}
+
+export interface LanguageOption {
+  code: string;
+  name: string;
+  isSource: boolean;
+}
+
+export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | null;
 export type RecordingState = 'idle' | 'recording' | 'processing';
 
 interface VoiceState {
   // Recording state
   recordingState: RecordingState;
   setRecordingState: (state: RecordingState) => void;
+  hasRecording: boolean;
+  recordingDuration: number;
+  setHasRecording: (has: boolean) => void;
+  setRecordingDuration: (duration: number) => void;
 
   // Transcript
   transcript: string;
@@ -74,6 +92,17 @@ interface VoiceState {
   setMusicTracks: (tracks: Track[]) => void;
   setMoodAnalysis: (analysis: MoodAnalysis | null) => void;
 
+  // Translation
+  translationResult: TranslationResult | null;
+  translationStreaming: string;
+  selectedSourceLanguage: string;
+  selectedTargetLanguage: string;
+  setTranslationResult: (result: TranslationResult | null) => void;
+  appendTranslationStreaming: (text: string) => void;
+  clearTranslationStreaming: () => void;
+  setSelectedSourceLanguage: (lang: string) => void;
+  setSelectedTargetLanguage: (lang: string) => void;
+
   // Processing state
   isProcessing: boolean;
   processingMessage: string;
@@ -86,6 +115,8 @@ interface VoiceState {
   // Settings
   selectedTone: string;
   setSelectedTone: (tone: string) => void;
+  toneIntensity: number;
+  setToneIntensity: (intensity: number) => void;
 
   // Reset
   reset: () => void;
@@ -93,6 +124,8 @@ interface VoiceState {
 
 const initialState = {
   recordingState: 'idle' as RecordingState,
+  hasRecording: false,
+  recordingDuration: 0,
   transcript: '',
   interimTranscript: '',
   isSpeechDetected: false,
@@ -103,16 +136,25 @@ const initialState = {
   toneShiftStreaming: '',
   musicTracks: [],
   moodAnalysis: null,
+  translationResult: null,
+  translationStreaming: '',
+  selectedSourceLanguage: 'auto',
+  selectedTargetLanguage: 'en',
   isProcessing: false,
   processingMessage: '',
   error: null,
   selectedTone: 'professional',
+  toneIntensity: 5,
 };
 
 export const useVoiceStore = create<VoiceState>((set, get) => ({
   ...initialState,
 
   setRecordingState: (state) => set({ recordingState: state }),
+
+  setHasRecording: (has) => set({ hasRecording: has }),
+
+  setRecordingDuration: (duration) => set({ recordingDuration: duration }),
 
   setTranscript: (text) => set({ transcript: text }),
 
@@ -149,12 +191,25 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
 
   setMoodAnalysis: (analysis) => set({ moodAnalysis: analysis }),
 
+  setTranslationResult: (result) => set({ translationResult: result }),
+
+  appendTranslationStreaming: (text) =>
+    set((state) => ({ translationStreaming: state.translationStreaming + text })),
+
+  clearTranslationStreaming: () => set({ translationStreaming: '' }),
+
+  setSelectedSourceLanguage: (lang) => set({ selectedSourceLanguage: lang }),
+
+  setSelectedTargetLanguage: (lang) => set({ selectedTargetLanguage: lang }),
+
   setProcessing: (isProcessing, message = '') =>
     set({ isProcessing, processingMessage: message }),
 
   setError: (error) => set({ error }),
 
   setSelectedTone: (tone) => set({ selectedTone: tone }),
+
+  setToneIntensity: (intensity) => set({ toneIntensity: Math.max(1, Math.min(10, intensity)) }),
 
   reset: () => set(initialState),
 }));

@@ -27,6 +27,12 @@ const agents: Array<{
     description: 'Find matching music',
     icon: <MusicIcon />,
   },
+  {
+    id: 'translator',
+    name: 'Translator',
+    description: 'Translate to different languages',
+    icon: <TranslateIcon />,
+  },
 ];
 
 export function AgentSelector() {
@@ -61,11 +67,12 @@ export function AgentSelector() {
             if (!anthropicKey) {
               throw new Error('Anthropic API key required for Tone Shifter');
             }
-            const { selectedTone } = useVoiceStore.getState();
+            const { selectedTone, toneIntensity } = useVoiceStore.getState();
             await invoke('shift_tone_streaming', {
               apiKey: anthropicKey,
               text: transcript,
               targetTone: selectedTone,
+              intensity: toneIntensity,
             });
             break;
 
@@ -85,6 +92,19 @@ export function AgentSelector() {
                 request: { query: transcript },
               });
             }
+            break;
+
+          case 'translator':
+            if (!openaiKey) {
+              throw new Error('OpenAI API key required for Translator');
+            }
+            const { selectedSourceLanguage, selectedTargetLanguage } = useVoiceStore.getState();
+            await invoke('translate_text_streaming', {
+              apiKey: openaiKey,
+              text: transcript,
+              sourceLanguage: selectedSourceLanguage,
+              targetLanguage: selectedTargetLanguage,
+            });
             break;
         }
       } catch (error) {
@@ -154,6 +174,18 @@ function MusicIcon() {
         strokeLinecap="round"
         strokeLinejoin="round"
         d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"
+      />
+    </svg>
+  );
+}
+
+function TranslateIcon() {
+  return (
+    <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"
       />
     </svg>
   );

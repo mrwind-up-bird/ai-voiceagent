@@ -2,6 +2,7 @@ pub mod agents;
 pub mod audio;
 pub mod secrets;
 pub mod transcription;
+pub mod tts;
 
 use std::sync::Arc;
 use tauri::Manager;
@@ -13,6 +14,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // Initialize transcription state
             let transcription_state: TranscriptionManager =
@@ -70,6 +72,10 @@ pub fn run() {
             audio::stop_recording,
             audio::is_recording,
             audio::list_audio_devices,
+            audio::save_recording,
+            audio::has_recording,
+            audio::get_recording_duration,
+            audio::clear_recording_buffer,
             // Transcription commands
             transcription::start_deepgram_stream,
             transcription::stop_deepgram_stream,
@@ -84,11 +90,21 @@ pub fn run() {
             agents::tone_shifter::shift_tone,
             agents::tone_shifter::shift_tone_streaming,
             agents::tone_shifter::get_available_tones,
+            agents::tone_shifter::get_tone_presets,
             // Music Matcher agent
             agents::music_matcher::match_music,
             agents::music_matcher::analyze_mood_from_transcript,
             agents::music_matcher::get_available_moods,
             agents::music_matcher::get_available_genres,
+            // Translator agent
+            agents::translator::translate_text,
+            agents::translator::translate_text_streaming,
+            agents::translator::get_available_languages,
+            // Text-to-Speech
+            tts::speak_text,
+            tts::stop_speech,
+            tts::is_speaking,
+            tts::get_available_voices,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

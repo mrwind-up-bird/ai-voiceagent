@@ -1,12 +1,16 @@
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+use once_cell::sync::Lazy;
 
 use crate::transcription::TranscriptionManager;
 
 const TARGET_SAMPLE_RATE: u32 = 16000;
 const VAD_THRESHOLD: f32 = 0.02;
+
+/// Global buffer to store all recorded audio samples for saving
+static RECORDING_BUFFER: Lazy<Mutex<Vec<i16>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
 /// Simple linear resampling from source rate to target rate
 fn resample(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
@@ -55,6 +59,11 @@ fn calculate_energy(samples: &[f32]) -> f32 {
 pub fn start_recording(app: AppHandle) -> Result<(), String> {
     if IS_RECORDING.load(Ordering::SeqCst) {
         return Err("Already recording".to_string());
+    }
+
+    // Clear the recording buffer for a new recording
+    if let Ok(mut buffer) = RECORDING_BUFFER.lock() {
+        buffer.clear();
     }
 
     IS_RECORDING.store(true, Ordering::SeqCst);
@@ -156,6 +165,11 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
                             chunk
                         };
 
+                        // Store in global recording buffer for later saving
+                        if let Ok(mut rec_buffer) = RECORDING_BUFFER.lock() {
+                            rec_buffer.extend(resampled.iter());
+                        }
+
                         // Send directly to Deepgram (bypassing frontend JSON serialization)
                         if let Ok(state) = transcription_state.try_lock() {
                             if state.is_streaming {
@@ -224,4 +238,80 @@ pub fn list_audio_devices() -> Result<Vec<String>, String> {
         .filter_map(|d| d.name().ok())
         .collect();
     Ok(devices)
+}
+
+/// Save the recorded audio buffer to a WAV file
+#[tauri::command]
+pub fn save_recording(app: AppHandle, filepath: String) -> Result<(), String> {
+    let samples = {
+        let buffer = RECORDING_BUFFER
+            .lock()
+            .map_err(|_| "Failed to lock recording buffer")?;
+        buffer.clone()
+    };
+
+    if samples.is_empty() {
+        return Err("No audio recorded".to_string());
+    }
+
+    // Create WAV spec for 16kHz mono 16-bit PCM
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: TARGET_SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+
+    let mut writer = hound::WavWriter::create(&filepath, spec)
+        .map_err(|e| format!("Failed to create WAV file: {}", e))?;
+
+    for sample in &samples {
+        writer
+            .write_sample(*sample)
+            .map_err(|e| format!("Failed to write sample: {}", e))?;
+    }
+
+    writer
+        .finalize()
+        .map_err(|e| format!("Failed to finalize WAV file: {}", e))?;
+
+    let duration_secs = samples.len() as f32 / TARGET_SAMPLE_RATE as f32;
+
+    let _ = app.emit("recording-saved", serde_json::json!({
+        "filepath": filepath,
+        "duration_secs": duration_secs,
+        "sample_count": samples.len()
+    }));
+
+    tracing::info!("Saved recording to {} ({:.1}s)", filepath, duration_secs);
+
+    Ok(())
+}
+
+/// Check if there's recorded audio available to save
+#[tauri::command]
+pub fn has_recording() -> Result<bool, String> {
+    let buffer = RECORDING_BUFFER
+        .lock()
+        .map_err(|_| "Failed to lock recording buffer")?;
+    Ok(!buffer.is_empty())
+}
+
+/// Get the duration of the current recording buffer in seconds
+#[tauri::command]
+pub fn get_recording_duration() -> Result<f32, String> {
+    let buffer = RECORDING_BUFFER
+        .lock()
+        .map_err(|_| "Failed to lock recording buffer")?;
+    Ok(buffer.len() as f32 / TARGET_SAMPLE_RATE as f32)
+}
+
+/// Clear the recording buffer
+#[tauri::command]
+pub fn clear_recording_buffer() -> Result<(), String> {
+    let mut buffer = RECORDING_BUFFER
+        .lock()
+        .map_err(|_| "Failed to lock recording buffer")?;
+    buffer.clear();
+    Ok(())
 }

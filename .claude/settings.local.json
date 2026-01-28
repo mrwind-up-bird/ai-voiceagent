@@ -23,7 +23,8 @@
       "Bash(security dump-keychain:*)",
       "Bash(security find-generic-password -s \"voice-intelligence-hub\")",
       "Bash(cargo clippy:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(pnpm add:*)"
     ]
   }
 }

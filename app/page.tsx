@@ -7,6 +7,9 @@ import { WindowControls } from './components/WindowControls';
 import { TranscriptDisplay } from './components/TranscriptDisplay';
 import { AgentSelector } from './components/AgentSelector';
 import { AgentResults } from './components/AgentResults';
+import { TranslationPanel } from './components/TranslationPanel';
+import { ToneSelector } from './components/ToneSelector';
+import { ResizeHandle } from './components/ResizeHandle';
 import { useTauriEvents } from './hooks/useTauriEvents';
 import { useAudioForwarding } from './hooks/useDeepgramStreaming';
 import { useEscapeKey } from './hooks/useGlobalShortcut';
@@ -36,22 +39,23 @@ export default function Home() {
   }, [error, setError]);
 
   return (
-    <main className="min-h-fit min-w-fit w-full flex justify-center p-4 overflow-hidden bg-transparent">
+    <main className="h-screen w-full flex justify-center p-4 overflow-hidden bg-transparent">
       <div className="
-        spotlight-container 
-        relative 
-        overflow-hidden 
-        w-full 
-        max-w-xl 
-        flex 
-        flex-col 
-        bg-black/60 
-        backdrop-blur-xl 
-        rounded-xl 
-        border 
-        border-white/10 
+        spotlight-container
+        relative
+        overflow-hidden
+        w-full
+        max-w-3xl
+        h-full
+        flex
+        flex-col
+        bg-black/60
+        backdrop-blur-xl
+        rounded-xl
+        border
+        border-white/10
         shadow-2xl
-        
+
         before:content-['']
         before:absolute
         before:inset-0
@@ -84,8 +88,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Content area */}
-        <div className="relative z-10 px-6 py-4">
+        {/* Content area - scrollable */}
+        <div className="relative z-10 px-6 py-4 flex-1 overflow-y-auto overflow-x-hidden">
           {error && (
             <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
               <p className="text-red-400 text-sm">{error}</p>
@@ -96,16 +100,21 @@ export default function Home() {
             <VoiceInput />
             <TranscriptDisplay />
             <AgentSelector />
+            <TranslationPanel />
+            <ToneSelector />
             <AgentResults />
           </div>
         </div>
 
         {/* Footer */}
-        <div className="relative z-10 px-6 py-4 text-center border-t border-white/5">
+        <div className="relative z-10 px-6 py-3 text-center border-t border-white/5 flex-shrink-0">
           <p className="text-xs text-gray-600">
             Press <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-gray-400">Cmd+Shift+V</kbd> to toggle
           </p>
         </div>
+
+        {/* Resize handles for frameless window */}
+        <ResizeHandle />
       </div>
 
       <WindowControls />

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useVoiceStore } from '../store/voiceStore';
 
 export function VoiceInput() {
@@ -9,8 +9,13 @@ export function VoiceInput() {
     setRecordingState,
     isSpeechDetected,
     audioEnergy,
+    hasRecording,
+    recordingDuration,
+    setHasRecording,
     setError,
   } = useVoiceStore();
+
+  const [isSaving, setIsSaving] = useState(false);
 
   const isRecording = recordingState === 'recording';
   const isProcessing = recordingState === 'processing';
@@ -49,6 +54,38 @@ export function VoiceInput() {
       setRecordingState('idle');
     }
   }, [isRecording, setRecordingState, setError]);
+
+  const saveRecording = useCallback(async () => {
+    if (isSaving) return;
+
+    try {
+      setIsSaving(true);
+      const { invoke } = await import('@tauri-apps/api/core');
+      const { save } = await import('@tauri-apps/plugin-dialog');
+
+      // Open save dialog
+      const filepath = await save({
+        defaultPath: `recording-${Date.now()}.wav`,
+        filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+      });
+
+      if (filepath) {
+        await invoke('save_recording', { filepath });
+        setHasRecording(false);
+      }
+    } catch (error) {
+      console.error('Save error:', error);
+      setError(error instanceof Error ? error.message : 'Failed to save recording');
+    } finally {
+      setIsSaving(false);
+    }
+  }, [isSaving, setHasRecording, setError]);
+
+  const formatDuration = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
 
   // Generate waveform bars based on audio energy
   const waveformBars = Array.from({ length: 5 }, (_, i) => {
@@ -118,11 +155,27 @@ export function VoiceInput() {
         )}
       </button>
 
-      {/* Status text */}
-      <div className="text-xs text-gray-500">
-        {isRecording && isSpeechDetected && 'Speech detected'}
-        {isRecording && !isSpeechDetected && 'Listening...'}
-        {isProcessing && 'Finalizing transcript...'}
+      {/* Status text and download button */}
+      <div className="flex items-center gap-3 text-xs text-gray-500">
+        {isRecording && isSpeechDetected && <span>Speech detected</span>}
+        {isRecording && !isSpeechDetected && <span>Listening...</span>}
+        {isProcessing && <span>Finalizing transcript...</span>}
+
+        {!isRecording && !isProcessing && hasRecording && (
+          <button
+            onClick={saveRecording}
+            disabled={isSaving}
+            className="flex items-center gap-1.5 px-2 py-1 rounded bg-voice-surface hover:bg-voice-border text-gray-300 transition-colors disabled:opacity-50"
+            title={`Save recording (${formatDuration(recordingDuration)})`}
+          >
+            {isSaving ? (
+              <LoadingSpinner className="w-3 h-3" />
+            ) : (
+              <DownloadIcon className="w-3 h-3" />
+            )}
+            <span>Save ({formatDuration(recordingDuration)})</span>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -177,6 +230,24 @@ function LoadingSpinner({ className }: { className?: string }) {
         className="opacity-75"
         fill="currentColor"
         d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
       />
     </svg>
   );

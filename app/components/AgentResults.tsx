@@ -1,6 +1,53 @@
 'use client';
 
-import { useVoiceStore, AgentType, ActionItem, Track } from '../store/voiceStore';
+import { useState, useCallback } from 'react';
+import { useVoiceStore, AgentType, ActionItem, Track, TranslationResult } from '../store/voiceStore';
+
+function useCopyToClipboard() {
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(async (text: string) => {
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  }, []);
+
+  return { copied, copy };
+}
+
+function useTextToSpeech() {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+
+  const speak = useCallback(async (text: string) => {
+    if (!text) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      setIsSpeaking(true);
+      await invoke('speak_text', { text, rate: 1.0 });
+      setIsSpeaking(false);
+    } catch (err) {
+      console.error('TTS error:', err);
+      setIsSpeaking(false);
+    }
+  }, []);
+
+  const stop = useCallback(async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('stop_speech');
+      setIsSpeaking(false);
+    } catch (err) {
+      console.error('Stop TTS error:', err);
+    }
+  }, []);
+
+  return { isSpeaking, speak, stop };
+}
 
 export function AgentResults() {
   const {
@@ -10,6 +57,8 @@ export function AgentResults() {
     toneShiftStreaming,
     musicTracks,
     moodAnalysis,
+    translationResult,
+    translationStreaming,
     isProcessing,
     processingMessage,
   } = useVoiceStore();
@@ -19,7 +68,7 @@ export function AgentResults() {
   }
 
   return (
-    <div className="w-full max-w-xl">
+    <div className="w-full">
       <div className="glass rounded-lg p-4">
         {isProcessing && (
           <div className="flex items-center gap-3 text-gray-400">
@@ -43,23 +92,47 @@ export function AgentResults() {
         {activeAgent === 'music-matcher' && !isProcessing && (
           <MusicMatchDisplay tracks={musicTracks} mood={moodAnalysis} />
         )}
+
+        {activeAgent === 'translator' && (
+          <TranslationDisplay
+            result={translationResult}
+            streaming={translationStreaming}
+            isProcessing={isProcessing}
+          />
+        )}
       </div>
     </div>
   );
 }
 
 function ActionItemsDisplay({ items }: { items: ActionItem[] }) {
+  const { copied, copy } = useCopyToClipboard();
+
   if (items.length === 0) {
     return (
       <div className="text-gray-400 text-sm">No action items found.</div>
     );
   }
 
+  const formatForCopy = () => {
+    return items
+      .map((item, i) => {
+        let line = `${i + 1}. [${item.priority.toUpperCase()}] ${item.task}`;
+        if (item.assignee) line += ` (@${item.assignee})`;
+        if (item.due_date) line += ` - Due: ${item.due_date}`;
+        return line;
+      })
+      .join('\n');
+  };
+
   return (
     <div>
-      <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">
-        Action Items ({items.length})
-      </h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          Action Items ({items.length})
+        </h3>
+        <CopyButton copied={copied} onClick={() => copy(formatForCopy())} />
+      </div>
       <ul className="space-y-3">
         {items.map((item, index) => (
           <li key={index} className="flex gap-3">
@@ -102,6 +175,8 @@ function ToneShiftDisplay({
   streaming: string;
   isProcessing: boolean;
 }) {
+  const { copied, copy } = useCopyToClipboard();
+  const { isSpeaking, speak, stop } = useTextToSpeech();
   const displayText = isProcessing ? streaming : result?.shifted;
 
   if (!displayText && !isProcessing) {
@@ -110,9 +185,17 @@ function ToneShiftDisplay({
 
   return (
     <div>
-      <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-3">
-        Tone Shifted {result?.tone && `(${result.tone})`}
-      </h3>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          Tone Shifted {result?.tone && `(${result.tone})`}
+        </h3>
+        {!isProcessing && displayText && (
+          <div className="flex items-center gap-1">
+            <SpeakButton isSpeaking={isSpeaking} onSpeak={() => speak(displayText)} onStop={stop} />
+            <CopyButton copied={copied} onClick={() => copy(displayText)} />
+          </div>
+        )}
+      </div>
       <div className="text-white text-sm leading-relaxed">
         {displayText}
         {isProcessing && <span className="animate-pulse">|</span>}
@@ -200,6 +283,68 @@ function MusicMatchDisplay({
   );
 }
 
+function TranslationDisplay({
+  result,
+  streaming,
+  isProcessing,
+}: {
+  result: TranslationResult | null;
+  streaming: string;
+  isProcessing: boolean;
+}) {
+  const { copied, copy } = useCopyToClipboard();
+  const { isSpeaking, speak, stop } = useTextToSpeech();
+  const displayText = isProcessing ? streaming : result?.translated;
+
+  if (!displayText && !isProcessing) {
+    return null;
+  }
+
+  const getLanguageName = (code: string): string => {
+    const languages: Record<string, string> = {
+      auto: 'Auto-detect',
+      en: 'English',
+      de: 'German',
+      es: 'Spanish',
+      fr: 'French',
+      it: 'Italian',
+      pt: 'Portuguese',
+      nl: 'Dutch',
+      ru: 'Russian',
+      ja: 'Japanese',
+      zh: 'Chinese',
+      ko: 'Korean',
+      ar: 'Arabic',
+    };
+    return languages[code] || code;
+  };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider">
+          Translation
+          {result && (
+            <span className="ml-2 normal-case">
+              ({getLanguageName(result.source_language)} → {getLanguageName(result.target_language)})
+            </span>
+          )}
+        </h3>
+        {!isProcessing && displayText && (
+          <div className="flex items-center gap-1">
+            <SpeakButton isSpeaking={isSpeaking} onSpeak={() => speak(displayText)} onStop={stop} />
+            <CopyButton copied={copied} onClick={() => copy(displayText)} />
+          </div>
+        )}
+      </div>
+      <div className="text-white text-sm leading-relaxed">
+        {displayText}
+        {isProcessing && <span className="animate-pulse">|</span>}
+      </div>
+    </div>
+  );
+}
+
 function LoadingSpinner() {
   return (
     <svg
@@ -228,6 +373,87 @@ function MusicIcon({ className }: { className?: string }) {
   return (
     <svg className={className} fill="currentColor" viewBox="0 0 24 24">
       <path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z" />
+    </svg>
+  );
+}
+
+function CopyButton({ copied, onClick }: { copied: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="p-1 text-gray-500 hover:text-white transition-colors rounded"
+      title="Copy to clipboard"
+    >
+      {copied ? <CheckIcon className="w-4 h-4 text-green-500" /> : <CopyIcon className="w-4 h-4" />}
+    </button>
+  );
+}
+
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+  );
+}
+
+function CheckIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+  );
+}
+
+function SpeakButton({
+  isSpeaking,
+  onSpeak,
+  onStop,
+}: {
+  isSpeaking: boolean;
+  onSpeak: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <button
+      onClick={isSpeaking ? onStop : onSpeak}
+      className="p-1 text-gray-500 hover:text-white transition-colors rounded"
+      title={isSpeaking ? 'Stop speaking' : 'Read aloud'}
+    >
+      {isSpeaking ? (
+        <StopCircleIcon className="w-4 h-4 text-voice-primary" />
+      ) : (
+        <SpeakerIcon className="w-4 h-4" />
+      )}
+    </button>
+  );
+}
+
+function SpeakerIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z"
+      />
+    </svg>
+  );
+}
+
+function StopCircleIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+      />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"
+      />
     </svg>
   );
 }

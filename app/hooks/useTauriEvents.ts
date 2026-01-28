@@ -41,6 +41,19 @@ interface ToneShiftResultPayload {
   tone: string;
 }
 
+interface TranslationChunkPayload {
+  text: string;
+  is_complete: boolean;
+}
+
+interface TranslationResultPayload {
+  original: string;
+  translated: string;
+  source_language: string;
+  target_language: string;
+  detected_language: string | null;
+}
+
 interface MusicMatchPayload {
   tracks: Array<{
     id: string;
@@ -65,6 +78,8 @@ interface MusicMatchPayload {
 export function useTauriEvents() {
   const {
     setRecordingState,
+    setHasRecording,
+    setRecordingDuration,
     appendTranscript,
     setVadState,
     setActionItems,
@@ -73,6 +88,9 @@ export function useTauriEvents() {
     clearToneShiftStreaming,
     setMusicTracks,
     setMoodAnalysis,
+    setTranslationResult,
+    appendTranslationStreaming,
+    clearTranslationStreaming,
     setProcessing,
     setError,
   } = useVoiceStore();
@@ -90,12 +108,33 @@ export function useTauriEvents() {
         });
         listeners.push(unlistenRecordingStarted);
 
-        const unlistenRecordingStopped = await listen('recording-stopped', () => {
+        const unlistenRecordingStopped = await listen('recording-stopped', async () => {
           // With streaming transcription, go back to idle when recording stops
           // Transcripts come in real-time during recording
           setRecordingState('idle');
+
+          // Check if there's recorded audio available
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const hasRec = await invoke<boolean>('has_recording');
+            setHasRecording(hasRec);
+            if (hasRec) {
+              const duration = await invoke<number>('get_recording_duration');
+              setRecordingDuration(duration);
+            }
+          } catch {
+            // Ignore errors
+          }
         });
         listeners.push(unlistenRecordingStopped);
+
+        const unlistenRecordingSaved = await listen<{ filepath: string; duration_secs: number }>(
+          'recording-saved',
+          (event) => {
+            console.log('Recording saved:', event.payload.filepath);
+          }
+        );
+        listeners.push(unlistenRecordingSaved);
 
         // Transcript events
         const unlistenTranscript = await listen<TranscriptPayload>(
@@ -193,6 +232,32 @@ export function useTauriEvents() {
           console.log('Deepgram WebSocket connected');
         });
         listeners.push(unlistenDeepgramConnected);
+
+        // Translation events
+        const unlistenTranslationStarted = await listen('translation-started', () => {
+          clearTranslationStreaming();
+          setProcessing(true, 'Translating...');
+        });
+        listeners.push(unlistenTranslationStarted);
+
+        const unlistenTranslationChunk = await listen<TranslationChunkPayload>(
+          'translation-chunk',
+          (event: TauriEvent<TranslationChunkPayload>) => {
+            if (!event.payload.is_complete) {
+              appendTranslationStreaming(event.payload.text);
+            }
+          }
+        );
+        listeners.push(unlistenTranslationChunk);
+
+        const unlistenTranslationComplete = await listen<TranslationResultPayload>(
+          'translation-complete',
+          (event: TauriEvent<TranslationResultPayload>) => {
+            setTranslationResult(event.payload);
+            setProcessing(false);
+          }
+        );
+        listeners.push(unlistenTranslationComplete);
       } catch (error) {
         // Running outside Tauri (e.g., in browser dev mode)
         console.log('Tauri events not available:', error);
@@ -206,6 +271,8 @@ export function useTauriEvents() {
     };
   }, [
     setRecordingState,
+    setHasRecording,
+    setRecordingDuration,
     appendTranscript,
     setVadState,
     setActionItems,
@@ -214,6 +281,9 @@ export function useTauriEvents() {
     clearToneShiftStreaming,
     setMusicTracks,
     setMoodAnalysis,
+    setTranslationResult,
+    appendTranslationStreaming,
+    clearTranslationStreaming,
     setProcessing,
     setError,
   ]);
