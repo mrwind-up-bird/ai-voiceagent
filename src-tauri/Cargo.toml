@@ -1,6 +1,6 @@
 [package]
 name = "aurus-voice-intelligence"
-version = "0.1.0"
+version = "1.0.0"
 description = "Voice Intelligence Hub - Desktop Voice Assistant"
 authors = ["Voice Intelligence Hub"]
 edition = "2021"

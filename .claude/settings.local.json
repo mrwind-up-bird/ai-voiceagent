@@ -34,7 +34,9 @@
       "Bash(npx knip:*)",
       "Bash(npx depcheck:*)",
       "Bash(npx ts-prune:*)",
-      "Bash(RUSTFLAGS=\"-W unused\" cargo check:*)"
+      "Bash(RUSTFLAGS=\"-W unused\" cargo check:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }
