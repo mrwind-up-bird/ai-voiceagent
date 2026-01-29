@@ -14,10 +14,12 @@ A native desktop voice assistant built with Tauri v2 + Next.js 14. Features a Sp
 
 | Agent | Description | API |
 |-------|-------------|-----|
+| **Action Items** | Extract tasks, commitments, and deadlines | OpenAI GPT-4o |
+| **Tone Shifter** | Rewrite text in 8 different tones with adjustable intensity | Claude Sonnet 4 |
 | **Translator** | Translate between 12+ languages with auto-detect | OpenAI GPT-4o |
-| **Tone Shifter** | Rewrite text in 8 different tones with adjustable intensity | Claude Sonnet |
-| **Action Items** | Extract tasks and commitments from transcripts | OpenAI GPT-4o |
-| **Music Matcher** | Find matching music based on transcript mood | Q-Records + OpenAI |
+| **Dev-Log** | Generate commit messages, Jira tickets, and Slack updates | OpenAI GPT-4o |
+| **Brain Dump** | Categorize thoughts into Eisenhower Matrix tasks, ideas, and notes | OpenAI GPT-4o |
+| **Mental Mirror** | Transform reflections into compassionate letters to future self | OpenAI GPT-4o |
 
 ### Additional Features
 - **Copy to Clipboard** - One-click copy for all outputs
@@ -129,9 +131,17 @@ ai-voiceagent/
 │   │       ├── action_items.rs   # GPT-4o task extraction
 │   │       ├── tone_shifter.rs   # Claude tone rewriting
 │   │       ├── translator.rs     # GPT-4o translation
+│   │       ├── dev_log.rs        # Developer documentation
+│   │       ├── brain_dump.rs     # Thought categorization
+│   │       ├── mental_mirror.rs  # Self-reflection letters
 │   │       └── music_matcher.rs  # Music search + mood
 │   ├── capabilities/             # Tauri permissions
 │   └── tauri.conf.json           # Tauri configuration
+├── docs/                         # Documentation
+│   ├── ARCHITECTURE.md           # System design + diagrams
+│   ├── IDEAS.md                  # Future enhancements
+│   └── TODO.md                   # Pending tasks
+├── .memory/                      # Session checkpoints
 └── __tests__/                    # Unit tests
 ```
 
@@ -190,6 +200,15 @@ cargo build           # Build
 | Assertive | Confident and direct | Negotiations, Leadership |
 | Diplomatic | Tactful and balanced | Feedback, Conflicts |
 | Enthusiastic | Energetic and positive | Marketing, Announcements |
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Architecture](docs/ARCHITECTURE.md) | System design, audio pipeline, Mermaid diagrams |
+| [Ideas](docs/IDEAS.md) | Future enhancements and feature roadmap |
+| [TODO](docs/TODO.md) | Pending tasks organized by priority |
+| [CLAUDE.md](CLAUDE.md) | AI assistant development guidelines |
 
 ## License
 
