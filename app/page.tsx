@@ -71,7 +71,11 @@ export default function Home() {
           className="relative z-10 flex items-center justify-between px-6 py-2 flex-shrink-0"
           data-tauri-drag-region
         >
-          <div className="flex items-center gap-3">
+          <div className="flex items-center justify-space-between gap-3">
+            <h3 className="text-xs text-gray-500">
+              <span className="bg-[url('/aurus-logo.png')] max-h-m"></span>
+              Aurus Voice Intelligence
+            </h3>
             <button
               onClick={reset}
               className="text-xs text-gray-500 hover:text-gray-300 transition-colors"

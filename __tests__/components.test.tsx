@@ -93,7 +93,11 @@ describe('AgentSelector', () => {
 
     expect(screen.getByText('Action Items')).toBeDefined();
     expect(screen.getByText('Tone Shifter')).toBeDefined();
-    expect(screen.getByText('Music Matcher')).toBeDefined();
+    expect(screen.getByText('Translator')).toBeDefined();
+    expect(screen.getByText('Dev-Log')).toBeDefined();
+    expect(screen.getByText('Brain Dump')).toBeDefined();
+    expect(screen.getByText('Letter to Myself')).toBeDefined();
+    // Music Matcher is disabled (backend preserved for future)
   });
 
   it('disables buttons when no transcript', () => {
