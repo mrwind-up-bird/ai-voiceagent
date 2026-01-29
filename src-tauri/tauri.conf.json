@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Aurus Voice Intelligence",
   "version": "../package.json",
-  "identifier": "com.aurusvoiceintelligence.app",
+  "identifier": "com.aurusvoiceintelligence",
   "build": {
     "beforeBuildCommand": "pnpm build",
     "beforeDevCommand": "pnpm dev",
