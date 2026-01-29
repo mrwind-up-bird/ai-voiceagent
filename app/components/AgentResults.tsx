@@ -1239,6 +1239,9 @@ function MentalMirrorDisplay({
   const { copied, copy } = useCopyToClipboard();
   const { isSpeaking, speak, stop } = useTextToSpeech();
   const [showLanguageMenu, setShowLanguageMenu] = useState(false);
+  const [actionStatus, setActionStatus] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isScheduling, setIsScheduling] = useState(false);
 
   const formatForText = (): string => {
     if (!result) return '';
@@ -1261,6 +1264,29 @@ ${result.message_to_tomorrow}
 ${result.disclaimer}`;
   };
 
+  const formatForMarkdown = (): string => {
+    if (!result) return '';
+    return `## Reflection
+
+${result.reflection}
+
+## Mental Check-in
+
+${result.mental_checkin}
+
+## The Release
+
+${result.the_release}
+
+## Message to Tomorrow
+
+*${result.message_to_tomorrow}*
+
+---
+
+> ${result.disclaimer}`;
+  };
+
   const originalText = result ? formatForText() : null;
 
   const {
@@ -1272,6 +1298,56 @@ ${result.disclaimer}`;
   } = useOutputTranslation(originalText);
 
   const showBlur = isProcessing || isTranslating;
+
+  // Schedule email for tomorrow (mock)
+  const handleScheduleEmail = async () => {
+    if (!result) return;
+    setIsScheduling(true);
+    setActionStatus(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      tomorrow.setHours(8, 0, 0, 0); // 8 AM tomorrow
+      const deliverAt = tomorrow.toISOString();
+
+      const response = await invoke<string>('schedule_mental_mirror_email', {
+        content: translatedText || formatForText(),
+        deliverAt,
+      });
+      setActionStatus(response);
+      setTimeout(() => setActionStatus(null), 3000);
+    } catch (err) {
+      setActionStatus(err instanceof Error ? err.message : 'Failed to schedule');
+      setTimeout(() => setActionStatus(null), 3000);
+    } finally {
+      setIsScheduling(false);
+    }
+  };
+
+  // Export to markdown file
+  const handleExportFile = async () => {
+    if (!result) return;
+    setIsExporting(true);
+    setActionStatus(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const response = await invoke<string>('export_letter_to_file', {
+        content: formatForMarkdown(),
+        filename: null,
+      });
+      setActionStatus(response);
+      setTimeout(() => setActionStatus(null), 3000);
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      if (!errorMsg.includes('cancelled')) {
+        setActionStatus(errorMsg);
+        setTimeout(() => setActionStatus(null), 3000);
+      }
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   if (!result && !isProcessing) {
     return null;
@@ -1402,9 +1478,54 @@ ${result.disclaimer}`;
               </p>
             </div>
           </div>
+
+          {/* Action Buttons */}
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button
+              onClick={handleScheduleEmail}
+              disabled={isScheduling || isProcessing}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-pink-500/20 text-pink-300 hover:bg-pink-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Schedule for tomorrow morning"
+            >
+              <MailIcon className="w-4 h-4" />
+              <span>{isScheduling ? 'Scheduling...' : 'Send Tomorrow'}</span>
+            </button>
+            <button
+              onClick={handleExportFile}
+              disabled={isExporting || isProcessing}
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium bg-purple-500/20 text-purple-300 hover:bg-purple-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Save as markdown file"
+            >
+              <SaveIcon className="w-4 h-4" />
+              <span>{isExporting ? 'Saving...' : 'Save .md'}</span>
+            </button>
+          </div>
+
+          {/* Action Status */}
+          {actionStatus && (
+            <div className="mt-2 px-3 py-2 rounded-lg bg-voice-surface/50 border border-voice-border">
+              <p className="text-xs text-gray-300">{actionStatus}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function MailIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+    </svg>
+  );
+}
+
+function SaveIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+    </svg>
   );
 }
 

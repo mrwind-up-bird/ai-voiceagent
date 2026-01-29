@@ -29,6 +29,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 async-tungstenite = { version = "0.26", features = ["tokio-runtime", "tokio-native-tls"] }
 hound = "3.5"
+chrono = "0.4"
 
 [features]
 default = ["custom-protocol"]

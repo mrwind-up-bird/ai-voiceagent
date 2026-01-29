@@ -109,6 +109,8 @@ pub fn run() {
             // Mental Mirror agent (Letter to Myself)
             agents::mental_mirror::generate_mental_mirror,
             agents::mental_mirror::generate_mental_mirror_streaming,
+            agents::mental_mirror::schedule_mental_mirror_email,
+            agents::mental_mirror::export_letter_to_file,
             // Text-to-Speech
             tts::speak_text,
             tts::stop_speech,

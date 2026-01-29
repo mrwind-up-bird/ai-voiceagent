@@ -230,3 +230,74 @@ pub async fn generate_mental_mirror_streaming(
 
     Ok(())
 }
+
+/// Schedule a mental mirror letter to be sent via email (mock implementation)
+/// In production, this would integrate with an email service
+#[tauri::command]
+pub async fn schedule_mental_mirror_email(
+    content: String,
+    deliver_at: String,
+) -> Result<String, String> {
+    if content.trim().is_empty() {
+        return Err("No letter content to schedule.".to_string());
+    }
+
+    // Mock implementation - logs to console
+    tracing::info!(
+        "MOCK EMAIL SCHEDULED:\nContent length: {} chars\nDelivery time: {}",
+        content.len(),
+        deliver_at
+    );
+
+    Ok(format!("Letter successfully scheduled for {}", deliver_at))
+}
+
+/// Export the mental mirror letter to a markdown file
+#[tauri::command]
+pub async fn export_letter_to_file(
+    app: AppHandle,
+    content: String,
+    filename: Option<String>,
+) -> Result<String, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    if content.trim().is_empty() {
+        return Err("No letter content to export.".to_string());
+    }
+
+    // Generate default filename with current date
+    let default_name = filename.unwrap_or_else(|| {
+        let now = chrono::Local::now();
+        format!("mental-mirror-{}.md", now.format("%Y-%m-%d"))
+    });
+
+    // Build the file dialog
+    let file_path = app
+        .dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Markdown", &["md"])
+        .add_filter("Text", &["txt"])
+        .blocking_save_file();
+
+    match file_path {
+        Some(path) => {
+            // Get the path as a string
+            let path_str = path.to_string();
+
+            // Format content with header
+            let now = chrono::Local::now();
+            let formatted_content = format!(
+                "# Letter to My Future Self\n\n*Generated on {}*\n\n---\n\n{}",
+                now.format("%A, %B %d, %Y at %H:%M"),
+                content
+            );
+
+            std::fs::write(&path_str, formatted_content)
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+
+            Ok(format!("Letter saved to {}", path_str))
+        }
+        None => Err("Export cancelled.".to_string()),
+    }
+}
