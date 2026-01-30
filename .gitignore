@@ -39,3 +39,4 @@ yarn-error.log*
 *.pem
 *.key
 stronghold.hold
+.memory/.initialized

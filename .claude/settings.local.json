@@ -36,7 +36,16 @@
       "Bash(npx ts-prune:*)",
       "Bash(RUSTFLAGS=\"-W unused\" cargo check:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(git tag:*)",
+      "Bash(gh run view:*)",
+      "Bash(pnpm --version:*)",
+      "Bash(gh release delete:*)",
+      "Bash(gh run list:*)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:crates.io)",
+      "Bash(ls:*)",
+      "Bash(npm install -g @anthropic-ai/claude-code)"
     ]
   }
 }
