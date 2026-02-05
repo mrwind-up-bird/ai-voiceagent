@@ -50,15 +50,6 @@ fn resample(samples: &[i16], source_rate: u32, target_rate: u32) -> Vec<i16> {
     output
 }
 
-/// Calculate audio energy for VAD
-fn calculate_energy(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
-        return 0.0;
-    }
-    let sum: f32 = samples.iter().map(|s| s * s).sum();
-    (sum / samples.len() as f32).sqrt()
-}
-
 impl AudioCapture for DesktopAudioCapture {
     fn start(&self, callback: Box<dyn Fn(AudioChunk) + Send + Sync>) -> Result<(), AudioCaptureError> {
         if self.is_recording.load(Ordering::SeqCst) {

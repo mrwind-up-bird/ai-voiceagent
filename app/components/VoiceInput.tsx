@@ -2,6 +2,8 @@
 
 import { useCallback, useState } from 'react';
 import { useVoiceStore } from '../store/voiceStore';
+import { usePlatform } from '../hooks/usePlatform';
+import { useWebAudioCapture } from '../hooks/useWebAudioCapture';
 
 export function VoiceInput() {
   const {
@@ -15,6 +17,9 @@ export function VoiceInput() {
     setError,
   } = useVoiceStore();
 
+  const { isMobile, isDesktop } = usePlatform();
+  const webAudio = useWebAudioCapture();
+
   const [isSaving, setIsSaving] = useState(false);
 
   const isRecording = recordingState === 'recording';
@@ -22,6 +27,38 @@ export function VoiceInput() {
 
   const toggleRecording = useCallback(async () => {
     try {
+      if (isMobile) {
+        // Mobile: use Web Audio API capture
+        if (isRecording) {
+          webAudio.stopRecording();
+          setRecordingState('idle');
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            await invoke('stop_deepgram_stream').catch(() => {});
+          } catch {
+            // Not in Tauri
+          }
+        } else {
+          setRecordingState('recording');
+
+          // Start Deepgram stream first (if API key exists)
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            const apiKey = await invoke<string | null>('get_api_key', { keyType: 'deepgram' });
+            if (apiKey) {
+              await invoke('start_deepgram_stream', { apiKey });
+            }
+          } catch (err) {
+            console.error('[VoiceInput] Failed to start Deepgram:', err);
+          }
+
+          // Start Web Audio capture (sends chunks to Rust via invoke)
+          await webAudio.startRecording();
+        }
+        return;
+      }
+
+      // Desktop: use native Rust audio capture
       const { invoke } = await import('@tauri-apps/api/core');
 
       if (isRecording) {
@@ -53,7 +90,7 @@ export function VoiceInput() {
       setError(error instanceof Error ? error.message : 'Recording failed');
       setRecordingState('idle');
     }
-  }, [isRecording, setRecordingState, setError]);
+  }, [isRecording, isMobile, isDesktop, setRecordingState, setError, webAudio]);
 
   const saveRecording = useCallback(async () => {
     if (isSaving) return;
@@ -161,7 +198,7 @@ export function VoiceInput() {
         {isRecording && !isSpeechDetected && <span>Listening...</span>}
         {isProcessing && <span>Finalizing transcript...</span>}
 
-        {!isRecording && !isProcessing && hasRecording && (
+        {!isRecording && !isProcessing && hasRecording && isDesktop && (
           <button
             onClick={saveRecording}
             disabled={isSaving}
