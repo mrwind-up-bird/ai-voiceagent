@@ -556,4 +556,59 @@ describe('useWebAudioCapture', () => {
       samples: expect.any(Array),
     });
   });
+
+  it('accumulates raw audio buffer for local Whisper fallback', async () => {
+    const mockInvoke = vi.fn().mockResolvedValue(undefined);
+
+    vi.doMock('../app/hooks/usePlatform', () => ({
+      usePlatform: () => ({
+        platform: 'ios',
+        isDesktop: false,
+        isMobile: true,
+        isIOS: true,
+        isAndroid: false,
+        isTauri: true,
+        supportsKeyboardShortcuts: false,
+        supportsWindowControls: false,
+      }),
+    }));
+    vi.doMock('@tauri-apps/api/core', () => ({
+      invoke: mockInvoke,
+    }));
+
+    const { useWebAudioCapture } = await import('../app/hooks/useWebAudioCapture');
+    const { result } = renderHook(() => useWebAudioCapture());
+
+    await waitFor(() => {
+      expect(result.current.isSupported).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.startRecording();
+    });
+
+    // Simulate two audio chunks
+    const chunk1 = new Float32Array(800).fill(0.3);
+    const chunk2 = new Float32Array(800).fill(0.7);
+
+    await act(async () => {
+      mockProcessor.onaudioprocess?.({ inputBuffer: { getChannelData: () => chunk1 } });
+      mockProcessor.onaudioprocess?.({ inputBuffer: { getChannelData: () => chunk2 } });
+      await new Promise((r) => setTimeout(r, 10));
+    });
+
+    // Stop recording
+    act(() => {
+      result.current.stopRecording();
+    });
+
+    // Get accumulated buffer
+    const buffer = result.current.getAudioBuffer();
+    expect(buffer).toBeInstanceOf(Float32Array);
+    expect(buffer.length).toBe(1600); // 800 + 800 samples
+
+    // Second call returns empty (buffer was cleared)
+    const emptyBuffer = result.current.getAudioBuffer();
+    expect(emptyBuffer.length).toBe(0);
+  });
 });

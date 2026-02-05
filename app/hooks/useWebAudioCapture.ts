@@ -29,6 +29,8 @@ interface WebAudioCaptureResult extends WebAudioCaptureState {
   startRecording: () => Promise<void>;
   stopRecording: () => void;
   requestPermission: () => Promise<boolean>;
+  /** Get buffered Float32 audio samples (for local Whisper transcription) */
+  getAudioBuffer: () => Float32Array;
 }
 
 /**
@@ -48,6 +50,7 @@ export function useWebAudioCapture(): WebAudioCaptureResult {
   const audioContextRef = useRef<AudioContext | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const bufferRef = useRef<number[]>([]);
+  const rawAudioRef = useRef<number[]>([]);
 
   // Check if Web Audio is supported
   useEffect(() => {
@@ -100,6 +103,9 @@ export function useWebAudioCapture(): WebAudioCaptureResult {
    * Process audio samples and send to Rust backend
    */
   const processAudioData = useCallback(async (samples: Float32Array) => {
+    // Accumulate raw Float32 samples for local Whisper fallback
+    rawAudioRef.current.push(...Array.from(samples));
+
     // Convert Float32 (-1 to 1) to Int16 (-32768 to 32767)
     const int16Samples = new Int16Array(samples.length);
     for (let i = 0; i < samples.length; i++) {
@@ -222,13 +228,23 @@ export function useWebAudioCapture(): WebAudioCaptureResult {
       workletNodeRef.current = null;
     }
 
-    // Clear buffer
+    // Clear IPC buffer (keep rawAudioRef for local transcription retrieval)
     bufferRef.current = [];
 
     setState((prev) => ({
       ...prev,
       isRecording: false,
     }));
+  }, []);
+
+  /**
+   * Get accumulated raw Float32 audio buffer and clear it.
+   * Used for local Whisper transcription when Deepgram is unavailable.
+   */
+  const getAudioBuffer = useCallback((): Float32Array => {
+    const buffer = new Float32Array(rawAudioRef.current);
+    rawAudioRef.current = [];
+    return buffer;
   }, []);
 
   // Cleanup on unmount
@@ -243,5 +259,6 @@ export function useWebAudioCapture(): WebAudioCaptureResult {
     startRecording,
     stopRecording,
     requestPermission,
+    getAudioBuffer,
   };
 }

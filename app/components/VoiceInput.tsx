@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useVoiceStore } from '../store/voiceStore';
 import { usePlatform } from '../hooks/usePlatform';
 import { useWebAudioCapture } from '../hooks/useWebAudioCapture';
+import { useLocalAI } from '../hooks/useLocalAI';
 
 export function VoiceInput() {
   const {
@@ -19,6 +20,8 @@ export function VoiceInput() {
 
   const { isMobile, isDesktop } = usePlatform();
   const webAudio = useWebAudioCapture();
+  const localAI = useLocalAI();
+  const useLocalWhisperRef = useRef(false);
 
   const [isSaving, setIsSaving] = useState(false);
 
@@ -31,15 +34,35 @@ export function VoiceInput() {
         // Mobile: use Web Audio API capture
         if (isRecording) {
           webAudio.stopRecording();
-          setRecordingState('idle');
-          try {
-            const { invoke } = await import('@tauri-apps/api/core');
-            await invoke('stop_deepgram_stream').catch(() => {});
-          } catch {
-            // Not in Tauri
+
+          if (useLocalWhisperRef.current) {
+            // No Deepgram key — transcribe locally via Whisper
+            setRecordingState('processing');
+            try {
+              const audioBuffer = webAudio.getAudioBuffer();
+              if (audioBuffer.length > 0) {
+                const result = await localAI.transcribe(audioBuffer);
+                useVoiceStore.getState().appendTranscript(result.text, true);
+              }
+            } catch (err) {
+              console.error('[VoiceInput] Local transcription failed:', err);
+              setError(err instanceof Error ? err.message : 'Local transcription failed');
+            }
+            useLocalWhisperRef.current = false;
+          } else {
+            // Stop Deepgram stream
+            try {
+              const { invoke } = await import('@tauri-apps/api/core');
+              await invoke('stop_deepgram_stream').catch(() => {});
+            } catch {
+              // Not in Tauri
+            }
           }
+
+          setRecordingState('idle');
         } else {
           setRecordingState('recording');
+          useLocalWhisperRef.current = false;
 
           // Start Deepgram stream first (if API key exists)
           try {
@@ -47,12 +70,17 @@ export function VoiceInput() {
             const apiKey = await invoke<string | null>('get_api_key', { keyType: 'deepgram' });
             if (apiKey) {
               await invoke('start_deepgram_stream', { apiKey });
+            } else {
+              // No Deepgram key — will use local Whisper on stop
+              useLocalWhisperRef.current = true;
             }
           } catch (err) {
-            console.error('[VoiceInput] Failed to start Deepgram:', err);
+            // Tauri not available — use local Whisper
+            useLocalWhisperRef.current = true;
+            console.log('[VoiceInput] No Tauri, will use local Whisper');
           }
 
-          // Start Web Audio capture (sends chunks to Rust via invoke)
+          // Start Web Audio capture (sends chunks to Rust or buffers for Whisper)
           await webAudio.startRecording();
         }
         return;
@@ -90,7 +118,7 @@ export function VoiceInput() {
       setError(error instanceof Error ? error.message : 'Recording failed');
       setRecordingState('idle');
     }
-  }, [isRecording, isMobile, isDesktop, setRecordingState, setError, webAudio]);
+  }, [isRecording, isMobile, isDesktop, setRecordingState, setError, webAudio, localAI]);
 
   const saveRecording = useCallback(async () => {
     if (isSaving) return;
