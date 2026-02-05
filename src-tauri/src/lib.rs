@@ -1,7 +1,12 @@
 pub mod agents;
-pub mod audio;
+pub mod platform;
 pub mod secrets;
 pub mod transcription;
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+pub mod audio;
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub mod tts;
 
 use std::sync::Arc;
@@ -15,15 +20,16 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_os::init())
         .setup(|app| {
             // Initialize transcription state
             let transcription_state: TranscriptionManager =
                 Arc::new(tokio::sync::Mutex::new(transcription::TranscriptionState::default()));
             app.manage(transcription_state);
 
-            tracing::info!("API keys stored in OS keychain (macOS Keychain / Windows Credential Manager)");
+            tracing::info!("API keys stored in OS secure storage (Keychain/Credential Manager/Keystore)");
 
-            // Register global shortcut (Cmd+Shift+V for Voice)
+            // Register global shortcut (Cmd+Shift+V for Voice) - Desktop only
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
@@ -67,14 +73,23 @@ pub fn run() {
             secrets::get_api_key,
             secrets::delete_api_key,
             secrets::has_api_keys,
-            // Audio commands
+            secrets::list_configured_keys,
+            // Audio commands (desktop only)
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::start_recording,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::stop_recording,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::is_recording,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::list_audio_devices,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::save_recording,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::has_recording,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::get_recording_duration,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::clear_recording_buffer,
             // Transcription commands
             transcription::start_deepgram_stream,
@@ -82,6 +97,7 @@ pub fn run() {
             transcription::send_audio_to_deepgram,
             transcription::is_deepgram_streaming,
             transcription::transcribe_with_assemblyai,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             transcription::transcribe_local_whisper,
             // Action Items agent
             agents::action_items::extract_action_items,
@@ -111,10 +127,14 @@ pub fn run() {
             agents::mental_mirror::generate_mental_mirror_streaming,
             agents::mental_mirror::schedule_mental_mirror_email,
             agents::mental_mirror::export_letter_to_file,
-            // Text-to-Speech
+            // Text-to-Speech (desktop only)
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             tts::speak_text,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             tts::stop_speech,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             tts::is_speaking,
+            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             tts::get_available_voices,
         ])
         .run(tauri::generate_context!())

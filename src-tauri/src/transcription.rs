@@ -1,10 +1,14 @@
 use async_tungstenite::{tokio::connect_async, tungstenite::Message};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, Mutex};
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
+use std::path::PathBuf;
+
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const DEEPGRAM_WS_URL: &str = "wss://api.deepgram.com/v1/listen";
@@ -318,7 +322,12 @@ pub async fn transcribe_with_assemblyai(
     }
 }
 
+// ============================================================================
+// Local Whisper Transcription (Desktop Only)
+// ============================================================================
+
 /// Get the path to the Whisper model file
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn get_model_path(app: &AppHandle) -> Result<PathBuf, String> {
     let app_data_dir = app
         .path()
@@ -332,6 +341,7 @@ fn get_model_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 /// Download the Whisper model if not present
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 async fn ensure_model_exists(model_path: &PathBuf) -> Result<(), String> {
     if model_path.exists() {
         tracing::info!("Whisper model found at {:?}", model_path);
@@ -363,6 +373,7 @@ async fn ensure_model_exists(model_path: &PathBuf) -> Result<(), String> {
 }
 
 /// Convert i16 PCM samples to f32 (normalized to -1.0 to 1.0)
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn convert_i16_to_f32(samples: &[i16]) -> Vec<f32> {
     samples
         .iter()
@@ -370,7 +381,8 @@ fn convert_i16_to_f32(samples: &[i16]) -> Vec<f32> {
         .collect()
 }
 
-/// Transcribe audio using local Whisper model
+/// Transcribe audio using local Whisper model (Desktop only)
+#[cfg(not(any(target_os = "ios", target_os = "android")))]
 #[tauri::command]
 pub async fn transcribe_local_whisper(
     app: AppHandle,

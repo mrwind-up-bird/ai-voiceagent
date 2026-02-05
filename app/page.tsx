@@ -14,14 +14,18 @@ import { useTauriEvents } from './hooks/useTauriEvents';
 import { useAudioForwarding } from './hooks/useDeepgramStreaming';
 import { useEscapeKey } from './hooks/useGlobalShortcut';
 import { useVoiceStore } from './store/voiceStore';
+import { usePlatform } from './hooks/usePlatform';
 
 export default function Home() {
   const { error, setError, reset } = useVoiceStore();
+  const { isDesktop, supportsWindowControls, supportsKeyboardShortcuts } = usePlatform();
 
   useTauriEvents();
   useAudioForwarding();
 
+  // Desktop-only: hide window on Escape
   useEscapeKey(async () => {
+    if (!isDesktop) return;
     try {
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const window = getCurrentWindow();
@@ -110,18 +114,21 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="relative z-10 px-6 py-3 text-center border-t border-white/5 flex-shrink-0">
-          <p className="text-xs text-gray-600">
-            Press <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-gray-400">Cmd+Shift+V</kbd> to toggle
-          </p>
-        </div>
+        {/* Footer - show keyboard shortcut hint only on desktop */}
+        {supportsKeyboardShortcuts && (
+          <div className="relative z-10 px-6 py-3 text-center border-t border-white/5 flex-shrink-0">
+            <p className="text-xs text-gray-600">
+              Press <kbd className="px-1.5 py-0.5 bg-white/5 rounded text-gray-400">Cmd+Shift+V</kbd> to toggle
+            </p>
+          </div>
+        )}
 
-        {/* Resize handles for frameless window */}
-        <ResizeHandle />
+        {/* Resize handles for frameless window - desktop only */}
+        {supportsWindowControls && <ResizeHandle />}
       </div>
 
-      <WindowControls />
+      {/* Window controls - desktop only */}
+      {supportsWindowControls && <WindowControls />}
     </main>
   );
 }
