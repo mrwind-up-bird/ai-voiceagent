@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { VoiceInput } from './components/VoiceInput';
 import { WindowControls } from './components/WindowControls';
@@ -10,15 +10,21 @@ import { AgentResults } from './components/AgentResults';
 import { TranslationPanel } from './components/TranslationPanel';
 import { ToneSelector } from './components/ToneSelector';
 import { ResizeHandle } from './components/ResizeHandle';
+import SyncStatus from './components/SyncStatus';
+import { SyncPairing } from './components/SyncPairing';
 import { useTauriEvents } from './hooks/useTauriEvents';
 import { useAudioForwarding } from './hooks/useDeepgramStreaming';
 import { useEscapeKey } from './hooks/useGlobalShortcut';
+import { useSync } from './hooks/useSync';
 import { useVoiceStore } from './store/voiceStore';
 import { usePlatform } from './hooks/usePlatform';
 
 export default function Home() {
-  const { error, setError, reset } = useVoiceStore();
+  const { error, setError, reset, syncStatus, transcript, actionItems, toneShiftResult, translationResult, devLogResult, brainDumpResult, mentalMirrorResult, musicTracks, moodAnalysis } = useVoiceStore();
   const { isDesktop, supportsWindowControls, supportsKeyboardShortcuts } = usePlatform();
+  const { createSession, joinSession, leaveSession, syncTranscript, syncAgentResult } = useSync();
+  const [showSyncPanel, setShowSyncPanel] = useState(false);
+  const prevTranscriptRef = useRef(transcript);
 
   useTauriEvents();
   useAudioForwarding();
@@ -41,6 +47,58 @@ export default function Home() {
       return () => clearTimeout(timer);
     }
   }, [error, setError]);
+
+  // Auto-close sync panel when connected
+  useEffect(() => {
+    if (syncStatus === 'connected') {
+      setShowSyncPanel(false);
+    }
+  }, [syncStatus]);
+
+  // Auto-sync transcript to peer when it changes
+  useEffect(() => {
+    if (syncStatus !== 'connected') return;
+    if (transcript !== prevTranscriptRef.current) {
+      prevTranscriptRef.current = transcript;
+      syncTranscript(transcript);
+    }
+  }, [transcript, syncStatus, syncTranscript]);
+
+  // Auto-sync agent results to peer
+  useEffect(() => {
+    if (syncStatus !== 'connected' || actionItems.length === 0) return;
+    syncAgentResult('action_items', JSON.stringify({ items: actionItems }));
+  }, [actionItems, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || !toneShiftResult) return;
+    syncAgentResult('tone_shift', JSON.stringify(toneShiftResult));
+  }, [toneShiftResult, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || !translationResult) return;
+    syncAgentResult('translation', JSON.stringify(translationResult));
+  }, [translationResult, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || !devLogResult) return;
+    syncAgentResult('dev_log', JSON.stringify(devLogResult));
+  }, [devLogResult, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || !brainDumpResult) return;
+    syncAgentResult('brain_dump', JSON.stringify(brainDumpResult));
+  }, [brainDumpResult, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || !mentalMirrorResult) return;
+    syncAgentResult('mental_mirror', JSON.stringify(mentalMirrorResult));
+  }, [mentalMirrorResult, syncStatus, syncAgentResult]);
+
+  useEffect(() => {
+    if (syncStatus !== 'connected' || (musicTracks.length === 0 && !moodAnalysis)) return;
+    syncAgentResult('music', JSON.stringify({ tracks: musicTracks, analysis: moodAnalysis }));
+  }, [musicTracks, moodAnalysis, syncStatus, syncAgentResult]);
 
   return (
     <main className="h-screen w-full flex justify-center p-4 overflow-hidden bg-transparent">
@@ -75,7 +133,7 @@ export default function Home() {
           className="relative z-10 flex items-center justify-between px-6 py-2 flex-shrink-0"
           data-tauri-drag-region
         >
-          <div className="flex items-center justify-space-between gap-3">
+          <div className="flex items-center gap-3">
             <h3 className="text-xs text-gray-500">
               <span className="bg-[url('/aurus-logo.png')] max-h-m"></span>
               Aurus Voice Intelligence
@@ -93,6 +151,20 @@ export default function Home() {
             >
               <SettingsIcon className="w-4 h-4" />
             </Link>
+          </div>
+          <div className="flex items-center gap-2">
+            {syncStatus !== 'disconnected' && <SyncStatus />}
+            <button
+              onClick={() => setShowSyncPanel(true)}
+              className={`p-1.5 rounded-lg transition-colors ${
+                syncStatus === 'connected'
+                  ? 'text-emerald-400 hover:bg-emerald-500/10'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
+              }`}
+              title="Sync devices"
+            >
+              <SyncIcon className="w-4 h-4" />
+            </button>
           </div>
         </div>
 
@@ -125,11 +197,29 @@ export default function Home() {
 
         {/* Resize handles for frameless window - desktop only */}
         {supportsWindowControls && <ResizeHandle />}
+
+        {/* Sync pairing modal */}
+        {showSyncPanel && (
+          <SyncPairing
+            createSession={createSession}
+            joinSession={joinSession}
+            leaveSession={leaveSession}
+            onClose={() => setShowSyncPanel(false)}
+          />
+        )}
       </div>
 
       {/* Window controls - desktop only */}
       {supportsWindowControls && <WindowControls />}
     </main>
+  );
+}
+
+function SyncIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+    </svg>
   );
 }
 
