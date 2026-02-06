@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Aurus Voice Intelligence is a native desktop voice assistant built with Tauri v2 + Next.js 14. It features a Spotlight-like interface triggered by global hotkey (Cmd+Shift+V) with three AI agents for processing voice transcripts.
 
+## Token & Performance Optimization
+1. **Context Loading:** On session start, ONLY read the latest `.memory/letter_XX.md`. Do not perform a full repository scan unless explicitly asked.
+2. **Task Switching:** Use `claude-3-5-haiku` for file management and small edits. Switch to `claude-3-5-sonnet` or `opus` only for logic-heavy tasks or "Letter to Blog" generation.
+3. **Draft Management:** Generated blog posts in `drafts/` should be ignored after creation to keep the working context clean.
+
 ## Build & Development Commands
 
 ```bash

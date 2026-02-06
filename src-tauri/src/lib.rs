@@ -17,10 +17,15 @@ use transcription::TranscriptionManager;
 pub fn run() {
     tracing_subscriber::fmt::init();
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_os::init())
+        .plugin(tauri_plugin_os::init());
+
+    // Global shortcut plugin is desktop-only (not available on mobile)
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_global_shortcut::Builder::new().build());
+
+    builder
         .setup(|app| {
             // Initialize transcription state
             let transcription_state: TranscriptionManager =

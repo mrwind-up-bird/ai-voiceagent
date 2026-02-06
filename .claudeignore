@@ -1,0 +1,31 @@
+# - Basierend auf der Projektstruktur
+# Abhängigkeiten & System
+node_modules/
+.git/
+.DS_Store
+*.log
+
+# Build Artefakte & Cache
+dist/
+build/
+.cache/
+.npm/
+
+# Media & Assets (Sparen massiv Token im AURUS App Kontext)
+public/assets/
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.gif
+*.mp4
+*.pdf
+
+# Archivierte Briefe (Nur den aktuellsten Brief im Kontext behalten)
+# Verhindert, dass Claude die gesamte Historie bei jedem Scan liest
+.memory/letter_0[1-9].md
+.memory/letter_1[0-9].md
+# Tipp: Behalte immer nur die letzten 2-3 Briefe aktiv, falls nötig.
+
+# Plugin-spezifische Temporärdateien
+install_agents.sh

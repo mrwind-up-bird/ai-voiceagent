@@ -1,0 +1,7 @@
+[agent]
+max_file_reads_per_request = 15
+project_rules_file = "CLAUDE.md"
+
+[memory]
+directory = ".memory/"
+template = "CLAUDE_TEMPLATE.md"
