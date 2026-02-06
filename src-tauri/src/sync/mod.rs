@@ -1,5 +1,8 @@
+pub mod discovery;
 pub mod document;
 pub mod encryption;
+pub mod pairing;
+pub mod transport;
 
 use std::fmt;
 use std::sync::Arc;
@@ -8,8 +11,9 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::sync::discovery::{SyncDiscovery, peer_from_resolved_service};
 use crate::sync::document::SyncDocument;
-use crate::sync::encryption::SessionEncryption;
+use crate::sync::transport::{TransportHandle, start_creator_transport, start_joiner_transport};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -103,12 +107,14 @@ pub struct SyncState {
     pub status: SyncStatus,
     /// Pairing code shown to the user (creator only).
     pub pairing_code: Option<String>,
-    /// Connected peer, if any. (Phase 5a supports 1:1 sync.)
+    /// Connected peer, if any. (Phase 5b supports 1:1 sync.)
     pub peer: Option<PeerInfo>,
-    /// The CRDT document holding all synced state.
-    pub doc: SyncDocument,
-    /// Session encryption layer (initialised after pairing).
-    pub encryption: Option<SessionEncryption>,
+    /// The CRDT document holding all synced state (shared with transport task).
+    pub doc: Arc<Mutex<SyncDocument>>,
+    /// Transport handle for sending updates to the peer.
+    pub transport: Option<TransportHandle>,
+    /// mDNS discovery (creator only — needed for unannounce on leave).
+    pub discovery: Option<SyncDiscovery>,
 }
 
 impl Default for SyncState {
@@ -120,8 +126,9 @@ impl Default for SyncState {
             status: SyncStatus::Disconnected,
             pairing_code: None,
             peer: None,
-            doc: SyncDocument::new(),
-            encryption: None,
+            doc: Arc::new(Mutex::new(SyncDocument::new())),
+            transport: None,
+            discovery: None,
         }
     }
 }
@@ -130,7 +137,8 @@ impl Drop for SyncState {
     fn drop(&mut self) {
         // Zero sensitive material on drop — defence in depth.
         self.pairing_code = None;
-        self.encryption = None;
+        self.transport = None;
+        self.discovery = None;
         tracing::info!("SyncState dropped — all session data wiped from memory");
     }
 }
@@ -150,7 +158,7 @@ impl SyncState {
     }
 
     /// Build a status event payload for the frontend.
-    fn status_event(&self) -> SyncStatusEvent {
+    pub fn status_event(&self) -> SyncStatusEvent {
         SyncStatusEvent {
             status: self.status.clone(),
             session_id: self.session_id.clone(),
@@ -159,13 +167,16 @@ impl SyncState {
         }
     }
 
-    /// Tear down the session — wipes doc, keys, and peer info.
-    fn reset_session(&mut self) {
+    /// Tear down the session — wipes doc, keys, peer, transport.
+    pub fn reset_session(&mut self) {
         self.session_id = None;
         self.pairing_code = None;
         self.peer = None;
-        self.encryption = None;
-        self.doc = SyncDocument::new();
+        self.transport = None;
+        if let Some(disc) = self.discovery.take() {
+            disc.shutdown().ok();
+        }
+        self.doc = Arc::new(Mutex::new(SyncDocument::new()));
         self.status = SyncStatus::Disconnected;
     }
 }
@@ -177,6 +188,7 @@ pub type SyncManager = Arc<Mutex<SyncState>>;
 // ---------------------------------------------------------------------------
 
 /// Create a new sync session. Returns a human-readable pairing code.
+/// Starts a local WebSocket server and announces via mDNS.
 #[tauri::command]
 pub async fn create_sync_session(
     app: AppHandle,
@@ -194,18 +206,42 @@ pub async fn create_sync_session(
     s.session_id = Some(session_id.clone());
     s.pairing_code = Some(pairing_code.clone());
     s.status = SyncStatus::WaitingForPeer;
-    s.doc = SyncDocument::new();
+    s.doc = Arc::new(Mutex::new(SyncDocument::new()));
 
+    let doc = s.doc.clone();
+    let device_name = s.device_name.clone();
     let event = s.status_event();
-    drop(s); // release lock before emitting
+    drop(s); // release lock before async work
 
     app.emit("sync-status-changed", &event).map_err(|e| e.to_string())?;
-    tracing::info!("Sync session created: {}", session_id);
 
+    // Start transport server
+    let sync_state = state.inner().clone();
+    let (port, handle) = start_creator_transport(
+        app.clone(),
+        pairing_code.clone(),
+        doc,
+        sync_state,
+    )
+    .await?;
+
+    // Announce via mDNS
+    let session_fingerprint = &session_id[..8];
+    let mut mdns = SyncDiscovery::new()?;
+    mdns.announce(port, &device_name, session_fingerprint)?;
+
+    // Store transport handle and discovery
+    let mut s = state.lock().await;
+    s.transport = Some(handle);
+    s.discovery = Some(mdns);
+    drop(s);
+
+    tracing::info!("Sync session created: {}, transport on port {}", session_id, port);
     Ok(pairing_code)
 }
 
 /// Join an existing sync session using a pairing code.
+/// Discovers the creator via mDNS and connects over WebSocket.
 #[tauri::command]
 pub async fn join_sync_session(
     app: AppHandle,
@@ -224,15 +260,37 @@ pub async fn join_sync_session(
 
     s.session_id = Some(Uuid::new_v4().to_string());
     s.status = SyncStatus::Connecting;
-    s.doc = SyncDocument::new();
+    s.doc = Arc::new(Mutex::new(SyncDocument::new()));
 
+    let doc = s.doc.clone();
     let event = s.status_event();
     drop(s);
 
     app.emit("sync-status-changed", &event).map_err(|e| e.to_string())?;
     tracing::info!("Joining sync session with code: {}", pairing_code);
 
-    // Actual connection logic comes in Phase 5b (transport layer).
+    // Spawn background discovery + connection task
+    let sync_state = state.inner().clone();
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        match discover_and_connect(app_clone.clone(), pairing_code, doc, sync_state.clone()).await {
+            Ok(handle) => {
+                let mut s = sync_state.lock().await;
+                s.transport = Some(handle);
+                // Status is already set to Connected by the transport task
+            }
+            Err(e) => {
+                tracing::error!("Discovery/connection failed: {}", e);
+                let mut s = sync_state.lock().await;
+                s.reset_session();
+                let event = s.status_event();
+                drop(s);
+                app_clone.emit("sync-status-changed", &event).ok();
+                app_clone.emit("sync-error", &e).ok();
+            }
+        }
+    });
+
     Ok(())
 }
 
@@ -276,6 +334,57 @@ pub async fn get_pairing_code(
     Ok(s.pairing_code.clone())
 }
 
+/// Update the transcript in the synced CRDT document and push to peer.
+#[tauri::command]
+pub async fn sync_update_transcript(
+    transcript: String,
+    state: tauri::State<'_, SyncManager>,
+) -> Result<(), String> {
+    let (doc, transport) = {
+        let s = state.lock().await;
+        if s.status != SyncStatus::Connected {
+            return Err(SyncError::NotConnected.into());
+        }
+        let doc = s.doc.clone();
+        let transport = s.transport.clone().ok_or::<String>(SyncError::NotConnected.into())?;
+        (doc, transport)
+    };
+
+    let update = {
+        let doc_guard = doc.lock().await;
+        doc_guard.set_transcript(&transcript);
+        doc_guard.encode_state_as_update()
+    };
+
+    transport.send_update(&update).await
+}
+
+/// Update an agent result in the synced CRDT document and push to peer.
+#[tauri::command]
+pub async fn sync_update_agent_result(
+    agent: String,
+    result: String,
+    state: tauri::State<'_, SyncManager>,
+) -> Result<(), String> {
+    let (doc, transport) = {
+        let s = state.lock().await;
+        if s.status != SyncStatus::Connected {
+            return Err(SyncError::NotConnected.into());
+        }
+        let doc = s.doc.clone();
+        let transport = s.transport.clone().ok_or::<String>(SyncError::NotConnected.into())?;
+        (doc, transport)
+    };
+
+    let update = {
+        let doc_guard = doc.lock().await;
+        doc_guard.set_agent_result(&agent, &result);
+        doc_guard.encode_state_as_update()
+    };
+
+    transport.send_update(&update).await
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -304,6 +413,63 @@ fn generate_pairing_code() -> String {
     format!("{}-{}-{}", digit, adj, noun)
 }
 
+/// Discover a creator via mDNS and connect via WebSocket transport.
+async fn discover_and_connect(
+    app: AppHandle,
+    pairing_code: String,
+    doc: Arc<Mutex<SyncDocument>>,
+    sync_state: SyncManager,
+) -> Result<TransportHandle, String> {
+    let discovery = SyncDiscovery::new()?;
+    let browser = discovery.browse()?;
+
+    let timeout = tokio::time::Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err("Discovery timed out — no sync session found on the local network".to_string());
+        }
+
+        match tokio::time::timeout(remaining, browser.recv_async()).await {
+            Ok(Ok(mdns_sd::ServiceEvent::ServiceResolved(info))) => {
+                if let Some(peer) = peer_from_resolved_service(&info) {
+                    tracing::info!(
+                        "Discovered sync service at {}:{}",
+                        peer.address, peer.port
+                    );
+                    match start_joiner_transport(
+                        app.clone(),
+                        peer.address.to_string(),
+                        peer.port,
+                        pairing_code.clone(),
+                        doc.clone(),
+                        sync_state.clone(),
+                    )
+                    .await
+                    {
+                        Ok(handle) => return Ok(handle),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to connect to {}: {} — trying next",
+                                peer.address, e
+                            );
+                        }
+                    }
+                }
+            }
+            Ok(Ok(_)) => { /* Other mDNS events — ignore */ }
+            Ok(Err(_)) => return Err("mDNS browse channel closed".to_string()),
+            Err(_) => {
+                return Err(
+                    "Discovery timed out — no sync session found on the local network".to_string(),
+                );
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,7 +492,8 @@ mod tests {
         assert!(state.session_id.is_none());
         assert!(state.pairing_code.is_none());
         assert!(state.peer.is_none());
-        assert!(state.encryption.is_none());
+        assert!(state.transport.is_none());
+        assert!(state.discovery.is_none());
         assert!(!state.device_id.is_empty());
     }
 
@@ -342,5 +509,6 @@ mod tests {
         assert_eq!(state.status, SyncStatus::Disconnected);
         assert!(state.session_id.is_none());
         assert!(state.pairing_code.is_none());
+        assert!(state.transport.is_none());
     }
 }

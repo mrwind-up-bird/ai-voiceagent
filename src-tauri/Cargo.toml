@@ -42,6 +42,12 @@ yrs = "0.21"
 ring = "0.17"
 rand = "0.8"
 
+# Pairing (SPAKE2 password-authenticated key exchange)
+spake2 = "0.4"
+
+# Local network discovery
+mdns-sd = "0.17"
+
 # Identifiers
 uuid = { version = "1", features = ["v4", "serde"] }
 

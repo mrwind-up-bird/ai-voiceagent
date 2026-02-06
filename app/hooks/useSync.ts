@@ -116,6 +116,28 @@ export function useSync() {
           }
         );
         listeners.push(unlistenSnapshot);
+
+        // Listen for unexpected disconnects
+        const unlistenDisconnect = await listen<void>(
+          'sync-disconnected',
+          () => {
+            setSyncStatus('disconnected');
+            setPairingCode(null);
+            setPairedDeviceName(null);
+            setSyncPeer(null);
+          }
+        );
+        listeners.push(unlistenDisconnect);
+
+        // Listen for sync errors
+        const unlistenError = await listen<string>(
+          'sync-error',
+          (event) => {
+            console.error('Sync error:', event.payload);
+            setSyncStatus('disconnected');
+          }
+        );
+        listeners.push(unlistenError);
       } catch (error) {
         console.log('Sync events not available:', error);
       }
@@ -176,5 +198,23 @@ export function useSync() {
     }
   }, []);
 
-  return { createSession, joinSession, leaveSession };
+  const syncTranscript = useCallback(async (transcript: string): Promise<void> => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('sync_update_transcript', { transcript });
+    } catch {
+      // Silently ignore — sync may not be connected
+    }
+  }, []);
+
+  const syncAgentResult = useCallback(async (agent: string, result: string): Promise<void> => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('sync_update_agent_result', { agent, result });
+    } catch {
+      // Silently ignore
+    }
+  }, []);
+
+  return { createSession, joinSession, leaveSession, syncTranscript, syncAgentResult };
 }

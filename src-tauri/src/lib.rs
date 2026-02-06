@@ -154,6 +154,8 @@ pub fn run() {
             sync::leave_sync_session,
             sync::get_sync_status,
             sync::get_pairing_code,
+            sync::sync_update_transcript,
+            sync::sync_update_agent_result,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
