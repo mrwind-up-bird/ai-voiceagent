@@ -29,6 +29,7 @@ export function useSync() {
     setPairingCode,
     setPairedDeviceName,
     setSyncPeer,
+    setSyncWarning,
     setTranscript,
     setRecordingState,
     setActiveAgent,
@@ -138,6 +139,43 @@ export function useSync() {
           }
         );
         listeners.push(unlistenError);
+
+        // Security events — heartbeat timeout (peer unresponsive)
+        const unlistenHeartbeat = await listen<void>(
+          'sync-heartbeat-timeout',
+          () => {
+            console.warn('Sync: peer heartbeat timeout — disconnecting');
+            setSyncStatus('disconnected');
+            setPairingCode(null);
+            setPairedDeviceName(null);
+            setSyncPeer(null);
+            setSyncWarning(null);
+          }
+        );
+        listeners.push(unlistenHeartbeat);
+
+        // Security events — session approaching max duration
+        const unlistenSessionWarning = await listen<string>(
+          'sync-session-warning',
+          (event) => {
+            setSyncWarning(event.payload);
+          }
+        );
+        listeners.push(unlistenSessionWarning);
+
+        // Security events — session max duration reached
+        const unlistenSessionTimeout = await listen<void>(
+          'sync-session-timeout',
+          () => {
+            console.warn('Sync: session timeout — disconnecting');
+            setSyncStatus('disconnected');
+            setPairingCode(null);
+            setPairedDeviceName(null);
+            setSyncPeer(null);
+            setSyncWarning(null);
+          }
+        );
+        listeners.push(unlistenSessionTimeout);
       } catch (error) {
         console.log('Sync events not available:', error);
       }
@@ -153,6 +191,7 @@ export function useSync() {
     setPairingCode,
     setPairedDeviceName,
     setSyncPeer,
+    setSyncWarning,
     setTranscript,
     setRecordingState,
     setActiveAgent,

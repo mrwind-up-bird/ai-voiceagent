@@ -5,7 +5,10 @@
 //! between devices on the same local network. The creator runs a WS server,
 //! the joiner connects as a client.
 //!
-//! Phase 5c will add `WebRtcTransport` for cross-network sync.
+//! Phase 5d adds security hardening:
+//! - Heartbeat every 5s with 15s dead-man's-switch timeout
+//! - Session timeout (4h max, warning at 3h45m)
+//! - Forward secrecy via HKDF key ratchet every 30 minutes
 
 use async_tungstenite::tokio::{accept_async, connect_async};
 use async_tungstenite::tungstenite::Message;
@@ -16,10 +19,26 @@ use tauri::{AppHandle, Emitter};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
+use tokio::time::{Duration, Instant, interval};
 
 use crate::sync::document::SyncDocument;
 use crate::sync::encryption::{EncryptedEnvelope, SessionEncryption};
 use crate::sync::pairing::{PairingCreator, PairingJoiner};
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Heartbeat interval — send a keepalive every 5 seconds.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
+/// Peer timeout — if no message received for 15 seconds, disconnect.
+const PEER_TIMEOUT: Duration = Duration::from_secs(15);
+/// Session maximum duration — 4 hours.
+const SESSION_MAX_DURATION: Duration = Duration::from_secs(4 * 60 * 60);
+/// Session warning — 15 minutes before max duration (3h45m).
+const SESSION_WARNING_BEFORE: Duration = Duration::from_secs(15 * 60);
+/// Key rotation interval — rotate encryption key every 30 minutes.
+const KEY_ROTATION_INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 // ---------------------------------------------------------------------------
 // Wire protocol messages
@@ -50,6 +69,9 @@ pub enum SyncMessage {
     /// Heartbeat / keepalive.
     #[serde(rename = "heartbeat")]
     Heartbeat { timestamp: i64 },
+    /// Key rotation notification — peer has rotated its encryption key.
+    #[serde(rename = "key_rotate")]
+    KeyRotate { epoch: u64 },
     /// Session terminated by peer.
     #[serde(rename = "goodbye")]
     Goodbye,
@@ -83,13 +105,6 @@ impl TransportHandle {
 
 /// Start a local WebSocket server on a random port.
 /// Returns the bound port and a handle for sending updates.
-///
-/// Flow:
-/// 1. Bind TCP listener on random port
-/// 2. Wait for joiner to connect
-/// 3. Perform SPAKE2 key exchange
-/// 4. Exchange device info
-/// 5. Enter sync loop: send/receive encrypted yrs updates
 pub async fn start_creator_transport(
     app: AppHandle,
     pairing_code: String,
@@ -168,7 +183,7 @@ async fn handle_creator_connection(
         .ok_or("Connection closed before SPAKE2 exchange")?
         .map_err(|e| format!("Failed to receive SPAKE2 message: {}", e))?;
     let joiner_payload = extract_spake2_payload(joiner_spake)?;
-    let encryption = Arc::new(creator.finish(&joiner_payload)?);
+    let encryption = creator.finish(&joiner_payload)?;
     tracing::info!("Sync transport: SPAKE2 key exchange complete (creator)");
 
     // --- Exchange device info ---
@@ -268,7 +283,7 @@ pub async fn start_joiner_transport(
         .await
         .map_err(|e| format!("Failed to send SPAKE2 message: {}", e))?;
 
-    let encryption = Arc::new(joiner.finish(&creator_payload)?);
+    let encryption = joiner.finish(&creator_payload)?;
     tracing::info!("Sync transport: SPAKE2 key exchange complete (joiner)");
 
     // --- Exchange device info (joiner receives first, then sends) ---
@@ -410,30 +425,57 @@ where
     }
 }
 
+/// Send a JSON-serialized SyncMessage over the WebSocket.
+async fn send_msg<S>(ws_write: &mut S, msg: &SyncMessage) -> Result<(), String>
+where
+    S: futures_util::Sink<Message, Error = async_tungstenite::tungstenite::Error> + Unpin,
+{
+    let json = serde_json::to_string(msg).map_err(|e| format!("Failed to serialize: {}", e))?;
+    ws_write
+        .send(Message::Text(json))
+        .await
+        .map_err(|e| format!("Failed to send: {}", e))
+}
+
 // ---------------------------------------------------------------------------
-// Shared sync loop
+// Shared sync loop (with security hardening)
 // ---------------------------------------------------------------------------
 
 /// The main sync loop shared by both creator and joiner.
-/// Receives plaintext updates from the local app via `outbound_rx`,
-/// encrypts them, and sends over the WebSocket. Incoming encrypted
-/// updates are decrypted and applied to the local CRDT document.
+///
+/// Security features (Phase 5d):
+/// - **Heartbeat**: Sends keepalive every 5s, disconnects if peer silent for 15s
+/// - **Session timeout**: Auto-disconnect after 4h, warning at 3h45m
+/// - **Forward secrecy**: HKDF key ratchet every 30 minutes
 async fn run_sync_loop<S, R>(
     app: AppHandle,
     mut ws_write: S,
     mut ws_read: R,
     mut outbound_rx: mpsc::Receiver<Vec<u8>>,
-    encryption: Arc<SessionEncryption>,
+    mut encryption: SessionEncryption,
     doc: Arc<Mutex<SyncDocument>>,
 ) -> Result<(), String>
 where
     S: futures_util::Sink<Message, Error = async_tungstenite::tungstenite::Error> + Unpin,
     R: futures_util::Stream<Item = Result<Message, async_tungstenite::tungstenite::Error>> + Unpin,
 {
+    let mut heartbeat_timer = interval(HEARTBEAT_INTERVAL);
+    heartbeat_timer.tick().await; // consume the immediate first tick
+
+    let session_start = Instant::now();
+    let session_warning_at = SESSION_MAX_DURATION - SESSION_WARNING_BEFORE;
+    let mut session_warning_sent = false;
+
+    let mut last_peer_activity = Instant::now();
+    let mut key_rotation_epoch: u64 = 0;
+    let mut last_key_rotation = Instant::now();
+
     loop {
         tokio::select! {
             // Inbound: message from remote peer
             incoming = ws_read.next() => {
+                last_peer_activity = Instant::now();
+
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<SyncMessage>(&text) {
@@ -454,7 +496,20 @@ where
                                 }
                             }
                             Ok(SyncMessage::Heartbeat { .. }) => {
-                                // Peer is alive — nothing to do
+                                // Peer is alive — last_peer_activity already updated
+                            }
+                            Ok(SyncMessage::KeyRotate { epoch }) => {
+                                // Peer rotated their key — we must rotate too
+                                if epoch > key_rotation_epoch {
+                                    encryption.rotate_key()
+                                        .map_err(|e| format!("Key rotation failed: {}", e))?;
+                                    key_rotation_epoch = epoch;
+                                    last_key_rotation = Instant::now();
+                                    tracing::info!(
+                                        "Key rotated to epoch {} (triggered by peer)",
+                                        epoch
+                                    );
+                                }
                             }
                             Ok(SyncMessage::Goodbye) => {
                                 tracing::info!("Peer disconnected gracefully");
@@ -476,7 +531,10 @@ where
                         tracing::error!("Sync transport read error: {}", e);
                         break;
                     }
-                    _ => {} // Ignore ping/pong/binary
+                    _ => {
+                        // Ping/pong/binary — still counts as activity
+                        last_peer_activity = Instant::now();
+                    }
                 }
             }
 
@@ -487,9 +545,7 @@ where
                         match encryption.encrypt(&plaintext) {
                             Ok(envelope) => {
                                 let msg = SyncMessage::Update { envelope };
-                                let json = serde_json::to_string(&msg)
-                                    .map_err(|e| format!("Failed to serialize: {}", e))?;
-                                if ws_write.send(Message::Text(json)).await.is_err() {
+                                if send_msg(&mut ws_write, &msg).await.is_err() {
                                     tracing::error!("Sync transport: failed to send update");
                                     break;
                                 }
@@ -501,10 +557,70 @@ where
                     }
                     None => {
                         // Channel closed (TransportHandle dropped) — send goodbye
-                        let goodbye = serde_json::to_string(&SyncMessage::Goodbye).unwrap_or_default();
-                        let _ = ws_write.send(Message::Text(goodbye)).await;
+                        let _ = send_msg(&mut ws_write, &SyncMessage::Goodbye).await;
                         break;
                     }
+                }
+            }
+
+            // Heartbeat timer
+            _ = heartbeat_timer.tick() => {
+                // --- Dead man's switch: check peer liveness ---
+                if last_peer_activity.elapsed() > PEER_TIMEOUT {
+                    tracing::warn!(
+                        "Peer heartbeat timeout ({:.1}s since last activity)",
+                        last_peer_activity.elapsed().as_secs_f64()
+                    );
+                    app.emit("sync-heartbeat-timeout", ()).ok();
+                    break;
+                }
+
+                // --- Send heartbeat ---
+                let hb = SyncMessage::Heartbeat {
+                    timestamp: chrono::Utc::now().timestamp(),
+                };
+                if send_msg(&mut ws_write, &hb).await.is_err() {
+                    tracing::error!("Sync transport: failed to send heartbeat");
+                    break;
+                }
+
+                // --- Session timeout check ---
+                let elapsed = session_start.elapsed();
+                if elapsed >= SESSION_MAX_DURATION {
+                    tracing::info!("Session timeout reached (4h) — disconnecting");
+                    app.emit("sync-session-timeout", ()).ok();
+                    let _ = send_msg(&mut ws_write, &SyncMessage::Goodbye).await;
+                    break;
+                }
+                if !session_warning_sent && elapsed >= session_warning_at {
+                    let remaining_secs = (SESSION_MAX_DURATION - elapsed).as_secs();
+                    tracing::info!(
+                        "Session timeout warning: {}m remaining",
+                        remaining_secs / 60
+                    );
+                    app.emit("sync-session-warning", remaining_secs).ok();
+                    session_warning_sent = true;
+                }
+
+                // --- Forward secrecy: key rotation ---
+                if last_key_rotation.elapsed() >= KEY_ROTATION_INTERVAL {
+                    key_rotation_epoch += 1;
+                    // Notify peer BEFORE rotating (WebSocket is ordered)
+                    let rotate_msg = SyncMessage::KeyRotate {
+                        epoch: key_rotation_epoch,
+                    };
+                    if send_msg(&mut ws_write, &rotate_msg).await.is_err() {
+                        tracing::error!("Failed to send key rotation notification");
+                        break;
+                    }
+                    // Now rotate our own key
+                    encryption.rotate_key()
+                        .map_err(|e| format!("Key rotation failed: {}", e))?;
+                    last_key_rotation = Instant::now();
+                    tracing::info!(
+                        "Key rotated to epoch {} (forward secrecy)",
+                        key_rotation_epoch
+                    );
                 }
             }
         }
@@ -576,5 +692,26 @@ mod tests {
             }
             _ => panic!("Expected DeviceInfo"),
         }
+    }
+
+    #[test]
+    fn test_key_rotate_serialization() {
+        let msg = SyncMessage::KeyRotate { epoch: 42 };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(json.contains("key_rotate"));
+        assert!(json.contains("42"));
+
+        let parsed: SyncMessage = serde_json::from_str(&json).unwrap();
+        match parsed {
+            SyncMessage::KeyRotate { epoch } => assert_eq!(epoch, 42),
+            _ => panic!("Expected KeyRotate"),
+        }
+    }
+
+    #[test]
+    fn test_constants_sanity() {
+        assert!(PEER_TIMEOUT > HEARTBEAT_INTERVAL);
+        assert!(SESSION_MAX_DURATION > SESSION_WARNING_BEFORE);
+        assert!(KEY_ROTATION_INTERVAL < SESSION_MAX_DURATION);
     }
 }

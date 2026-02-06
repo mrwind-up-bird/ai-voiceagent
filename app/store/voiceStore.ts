@@ -200,10 +200,12 @@ interface VoiceState {
   pairingCode: string | null;
   pairedDeviceName: string | null;
   syncPeer: PeerInfo | null;
+  syncWarning: string | null;
   setSyncStatus: (status: SyncStatus) => void;
   setPairingCode: (code: string | null) => void;
   setPairedDeviceName: (name: string | null) => void;
   setSyncPeer: (peer: PeerInfo | null) => void;
+  setSyncWarning: (warning: string | null) => void;
 
   // Reset
   reset: () => void;
@@ -243,6 +245,7 @@ const initialState = {
   pairingCode: null,
   pairedDeviceName: null,
   syncPeer: null,
+  syncWarning: null,
 };
 
 export const useVoiceStore = create<VoiceState>((set, get) => ({
@@ -336,6 +339,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   setPairingCode: (code) => set({ pairingCode: code }),
   setPairedDeviceName: (name) => set({ pairedDeviceName: name }),
   setSyncPeer: (peer) => set({ syncPeer: peer }),
+  setSyncWarning: (warning) => set({ syncWarning: warning }),
 
   reset: () => set(initialState),
 }));
