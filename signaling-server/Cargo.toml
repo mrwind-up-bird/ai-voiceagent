@@ -11,3 +11,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+[dev-dependencies]
+async-tungstenite = { version = "0.26", features = ["tokio-runtime", "tokio-rustls-native-certs"] }
+futures-util = "0.3"
+tokio-rustls = "0.26"
