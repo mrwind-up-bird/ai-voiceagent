@@ -90,6 +90,11 @@ pub struct TransportHandle {
 }
 
 impl TransportHandle {
+    /// Create a new transport handle from an mpsc sender.
+    pub fn new(update_tx: mpsc::Sender<Vec<u8>>) -> Self {
+        Self { update_tx }
+    }
+
     /// Send a plaintext yrs update to the peer (encrypted by the transport).
     pub async fn send_update(&self, update: &[u8]) -> Result<(), String> {
         self.update_tx
@@ -345,7 +350,7 @@ pub async fn start_joiner_transport(
 // ---------------------------------------------------------------------------
 
 /// Extract a SPAKE2 payload from a WebSocket message.
-fn extract_spake2_payload(msg: Message) -> Result<Vec<u8>, String> {
+pub(crate) fn extract_spake2_payload(msg: Message) -> Result<Vec<u8>, String> {
     match msg {
         Message::Text(text) => {
             let msg: SyncMessage =
@@ -360,7 +365,7 @@ fn extract_spake2_payload(msg: Message) -> Result<Vec<u8>, String> {
 }
 
 /// Send encrypted device info to the peer.
-async fn send_encrypted_device_info<S>(
+pub(crate) async fn send_encrypted_device_info<S>(
     ws_write: &mut S,
     encryption: &SessionEncryption,
     device_id: &str,
@@ -384,7 +389,7 @@ where
 }
 
 /// Receive and decrypt device info from the peer.
-async fn receive_encrypted_device_info<R>(
+pub(crate) async fn receive_encrypted_device_info<R>(
     ws_read: &mut R,
     encryption: &SessionEncryption,
 ) -> Result<super::PeerInfo, String>
@@ -426,7 +431,7 @@ where
 }
 
 /// Send a JSON-serialized SyncMessage over the WebSocket.
-async fn send_msg<S>(ws_write: &mut S, msg: &SyncMessage) -> Result<(), String>
+pub(crate) async fn send_msg<S>(ws_write: &mut S, msg: &SyncMessage) -> Result<(), String>
 where
     S: futures_util::Sink<Message, Error = async_tungstenite::tungstenite::Error> + Unpin,
 {
@@ -447,7 +452,7 @@ where
 /// - **Heartbeat**: Sends keepalive every 5s, disconnects if peer silent for 15s
 /// - **Session timeout**: Auto-disconnect after 4h, warning at 3h45m
 /// - **Forward secrecy**: HKDF key ratchet every 30 minutes
-async fn run_sync_loop<S, R>(
+pub(crate) async fn run_sync_loop<S, R>(
     app: AppHandle,
     mut ws_write: S,
     mut ws_read: R,

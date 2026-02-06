@@ -2,7 +2,9 @@ pub mod discovery;
 pub mod document;
 pub mod encryption;
 pub mod pairing;
+pub mod signaling;
 pub mod transport;
+pub mod webrtc;
 
 use std::fmt;
 use std::sync::Arc;
@@ -14,6 +16,7 @@ use uuid::Uuid;
 use crate::sync::discovery::{SyncDiscovery, peer_from_resolved_service};
 use crate::sync::document::SyncDocument;
 use crate::sync::transport::{TransportHandle, start_creator_transport, start_joiner_transport};
+use crate::sync::webrtc::establish_webrtc_transport;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -236,6 +239,118 @@ pub async fn create_sync_session(
     s.discovery = Some(mdns);
     drop(s);
 
+    // Also register on signaling server for WebRTC fallback (creator side).
+    // This runs in the background — if a joiner connects via WebRTC before
+    // local network, this transport takes over.
+    let webrtc_pairing_code = pairing_code.clone();
+    let webrtc_sync_state = state.inner().clone();
+    let webrtc_app = app.clone();
+    tokio::spawn(async move {
+        let device_id = {
+            let s = webrtc_sync_state.lock().await;
+            s.device_id.clone()
+        };
+
+        match establish_webrtc_transport(
+            DEFAULT_SIGNALING_URL,
+            &webrtc_pairing_code,
+            &device_id,
+            true, // creator
+        ).await {
+            Ok((sink, stream, encryption, session)) => {
+                // Check if we're still waiting for a peer (local might have connected first)
+                let should_use = {
+                    let s = webrtc_sync_state.lock().await;
+                    s.status == SyncStatus::WaitingForPeer
+                };
+
+                if should_use {
+                    tracing::info!("WebRTC fallback connected — using cross-network transport");
+
+                    // Exchange device info
+                    let (dev_id, dev_name) = {
+                        let s = webrtc_sync_state.lock().await;
+                        (s.device_id.clone(), s.device_name.clone())
+                    };
+
+                    let mut sink = sink;
+                    let mut stream = stream;
+                    let doc = {
+                        let s = webrtc_sync_state.lock().await;
+                        s.doc.clone()
+                    };
+
+                    if let Err(e) = transport::send_encrypted_device_info(&mut sink, &encryption, &dev_id, &dev_name).await {
+                        tracing::error!("WebRTC: failed to send device info: {}", e);
+                        return;
+                    }
+                    let peer_info = match transport::receive_encrypted_device_info(&mut stream, &encryption).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::error!("WebRTC: failed to receive device info: {}", e);
+                            return;
+                        }
+                    };
+
+                    // Send initial state
+                    {
+                        let doc_guard = doc.lock().await;
+                        let full_update = doc_guard.encode_state_as_update();
+                        if let Ok(envelope) = encryption.encrypt(&full_update) {
+                            let msg = transport::SyncMessage::Update { envelope };
+                            let _ = transport::send_msg(&mut sink, &msg).await;
+                        }
+                    }
+
+                    // Update state
+                    let (update_tx, update_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+                    {
+                        let mut s = webrtc_sync_state.lock().await;
+                        s.status = SyncStatus::Connected;
+                        s.peer = Some(peer_info);
+                        s.transport = Some(TransportHandle::new(update_tx));
+                        let event = s.status_event();
+                        drop(s);
+                        webrtc_app.emit("sync-status-changed", &event).ok();
+                    }
+
+                    // Run sync loop
+                    let _session = session;
+                    let result = transport::run_sync_loop(
+                        webrtc_app.clone(),
+                        sink,
+                        stream,
+                        update_rx,
+                        encryption,
+                        doc,
+                    ).await;
+
+                    if let Err(ref e) = result {
+                        tracing::error!("Sync transport error (WebRTC creator): {}", e);
+                    }
+
+                    // Clean up
+                    {
+                        let mut s = webrtc_sync_state.lock().await;
+                        if s.status != SyncStatus::Disconnected {
+                            s.transport = None;
+                            s.reset_session();
+                            let event = s.status_event();
+                            drop(s);
+                            webrtc_app.emit("sync-status-changed", &event).ok();
+                        }
+                    }
+                } else {
+                    tracing::info!("WebRTC fallback: local transport already connected, ignoring");
+                }
+            }
+            Err(e) => {
+                // WebRTC fallback failed — that's OK, local transport may work
+                tracing::debug!("WebRTC fallback registration failed (non-fatal): {}", e);
+            }
+        }
+    });
+
     tracing::info!("Sync session created: {}, transport on port {}", session_id, port);
     Ok(pairing_code)
 }
@@ -413,8 +528,112 @@ fn generate_pairing_code() -> String {
     format!("{}-{}-{}", digit, adj, noun)
 }
 
-/// Discover a creator via mDNS and connect via WebSocket transport.
+/// Default signaling server URL (can be overridden).
+const DEFAULT_SIGNALING_URL: &str = "ws://localhost:8765/ws";
+
+/// Discover a creator via mDNS (5s) and connect, or fall back to WebRTC signaling.
 async fn discover_and_connect(
+    app: AppHandle,
+    pairing_code: String,
+    doc: Arc<Mutex<SyncDocument>>,
+    sync_state: SyncManager,
+) -> Result<TransportHandle, String> {
+    // Phase 1: Try mDNS local discovery for 5 seconds
+    tracing::info!("Trying local network discovery (mDNS, 5s timeout)...");
+    match try_local_discovery(app.clone(), pairing_code.clone(), doc.clone(), sync_state.clone()).await {
+        Ok(handle) => {
+            tracing::info!("Connected via local network (mDNS)");
+            return Ok(handle);
+        }
+        Err(e) => {
+            tracing::info!("Local discovery failed: {} — falling back to WebRTC", e);
+        }
+    }
+
+    // Phase 2: Fall back to WebRTC via signaling server
+    tracing::info!("Attempting cross-network connection via WebRTC signaling...");
+    app.emit("sync-status-changed", &SyncStatusEvent {
+        status: SyncStatus::Connecting,
+        session_id: None,
+        pairing_code: Some(pairing_code.clone()),
+        peer: None,
+    }).ok();
+
+    let device_id = {
+        let s = sync_state.lock().await;
+        s.device_id.clone()
+    };
+
+    let (sink, stream, encryption, session) = establish_webrtc_transport(
+        DEFAULT_SIGNALING_URL,
+        &pairing_code,
+        &device_id,
+        false, // joiner
+    ).await?;
+
+    // Exchange device info over the WebRTC data channel
+    let (device_id, device_name) = {
+        let s = sync_state.lock().await;
+        (s.device_id.clone(), s.device_name.clone())
+    };
+
+    let mut sink = sink;
+    let mut stream = stream;
+
+    transport::send_encrypted_device_info(&mut sink, &encryption, &device_id, &device_name).await?;
+    let peer_info = transport::receive_encrypted_device_info(&mut stream, &encryption).await?;
+
+    // Update state to Connected
+    {
+        let mut s = sync_state.lock().await;
+        s.status = SyncStatus::Connected;
+        s.peer = Some(peer_info);
+        let event = s.status_event();
+        drop(s);
+        app.emit("sync-status-changed", &event).ok();
+    }
+
+    // Start sync loop using WebRTC sink/stream
+    let (update_tx, update_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let handle = TransportHandle::new(update_tx);
+
+    let sync_state_clone = sync_state.clone();
+    let app_clone = app.clone();
+    tokio::spawn(async move {
+        // Keep session alive for the duration of the sync loop
+        let _session = session;
+
+        let result = transport::run_sync_loop(
+            app_clone.clone(),
+            sink,
+            stream,
+            update_rx,
+            encryption,
+            doc,
+        ).await;
+
+        if let Err(ref e) = result {
+            tracing::error!("Sync transport error (WebRTC joiner): {}", e);
+        }
+
+        // Clean up state on disconnect
+        {
+            let mut s = sync_state_clone.lock().await;
+            if s.status != SyncStatus::Disconnected {
+                s.transport = None;
+                s.reset_session();
+                let event = s.status_event();
+                drop(s);
+                app_clone.emit("sync-status-changed", &event).ok();
+            }
+        }
+    });
+
+    Ok(handle)
+}
+
+/// Try to discover and connect via mDNS on the local network (5 second timeout).
+async fn try_local_discovery(
     app: AppHandle,
     pairing_code: String,
     doc: Arc<Mutex<SyncDocument>>,
@@ -423,13 +642,13 @@ async fn discover_and_connect(
     let discovery = SyncDiscovery::new()?;
     let browser = discovery.browse()?;
 
-    let timeout = tokio::time::Duration::from_secs(30);
+    let timeout = tokio::time::Duration::from_secs(5);
     let deadline = tokio::time::Instant::now() + timeout;
 
     loop {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
-            return Err("Discovery timed out — no sync session found on the local network".to_string());
+            return Err("Local discovery timed out (5s)".to_string());
         }
 
         match tokio::time::timeout(remaining, browser.recv_async()).await {
@@ -462,9 +681,7 @@ async fn discover_and_connect(
             Ok(Ok(_)) => { /* Other mDNS events — ignore */ }
             Ok(Err(_)) => return Err("mDNS browse channel closed".to_string()),
             Err(_) => {
-                return Err(
-                    "Discovery timed out — no sync session found on the local network".to_string(),
-                );
+                return Err("Local discovery timed out (5s)".to_string());
             }
         }
     }
