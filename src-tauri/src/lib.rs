@@ -1,6 +1,7 @@
 pub mod agents;
 pub mod platform;
 pub mod secrets;
+pub mod sync;
 pub mod transcription;
 
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
@@ -11,6 +12,7 @@ pub mod tts;
 
 use std::sync::Arc;
 use tauri::Manager;
+use sync::SyncManager;
 use transcription::TranscriptionManager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -31,6 +33,11 @@ pub fn run() {
             let transcription_state: TranscriptionManager =
                 Arc::new(tokio::sync::Mutex::new(transcription::TranscriptionState::default()));
             app.manage(transcription_state);
+
+            // Initialize sync state (ephemeral — wiped on drop)
+            let sync_state: SyncManager =
+                Arc::new(tokio::sync::Mutex::new(sync::SyncState::default()));
+            app.manage(sync_state);
 
             tracing::info!("API keys stored in OS secure storage (Keychain/Credential Manager/Keystore)");
 
@@ -141,6 +148,12 @@ pub fn run() {
             tts::is_speaking,
             #[cfg(not(any(target_os = "ios", target_os = "android")))]
             tts::get_available_voices,
+            // Sync commands (ephemeral P2P sync)
+            sync::create_sync_session,
+            sync::join_sync_session,
+            sync::leave_sync_session,
+            sync::get_sync_status,
+            sync::get_pairing_code,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

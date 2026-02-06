@@ -97,6 +97,13 @@ export interface MentalMirrorResult {
 
 export type AgentType = 'action-items' | 'tone-shifter' | 'music-matcher' | 'translator' | 'dev-log' | 'brain-dump' | 'mental-mirror' | null;
 export type RecordingState = 'idle' | 'recording' | 'processing';
+export type SyncStatus = 'disconnected' | 'waiting_for_peer' | 'connecting' | 'connected';
+
+export interface PeerInfo {
+  device_id: string;
+  device_name: string;
+  connected_at: number;
+}
 
 interface VoiceState {
   // Recording state
@@ -188,6 +195,16 @@ interface VoiceState {
   toneLengthAdjustment: number;
   setToneLengthAdjustment: (adjustment: number) => void;
 
+  // Sync
+  syncStatus: SyncStatus;
+  pairingCode: string | null;
+  pairedDeviceName: string | null;
+  syncPeer: PeerInfo | null;
+  setSyncStatus: (status: SyncStatus) => void;
+  setPairingCode: (code: string | null) => void;
+  setPairedDeviceName: (name: string | null) => void;
+  setSyncPeer: (peer: PeerInfo | null) => void;
+
   // Reset
   reset: () => void;
 }
@@ -222,6 +239,10 @@ const initialState = {
   selectedTone: 'professional',
   toneIntensity: 5,
   toneLengthAdjustment: 0,
+  syncStatus: 'disconnected' as SyncStatus,
+  pairingCode: null,
+  pairedDeviceName: null,
+  syncPeer: null,
 };
 
 export const useVoiceStore = create<VoiceState>((set, get) => ({
@@ -310,6 +331,11 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
   setToneIntensity: (intensity) => set({ toneIntensity: Math.max(1, Math.min(10, intensity)) }),
 
   setToneLengthAdjustment: (adjustment) => set({ toneLengthAdjustment: Math.max(-50, Math.min(100, adjustment)) }),
+
+  setSyncStatus: (status) => set({ syncStatus: status }),
+  setPairingCode: (code) => set({ pairingCode: code }),
+  setPairedDeviceName: (name) => set({ pairedDeviceName: name }),
+  setSyncPeer: (peer) => set({ syncPeer: peer }),
 
   reset: () => set(initialState),
 }));
