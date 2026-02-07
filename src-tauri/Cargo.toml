@@ -51,12 +51,6 @@ mdns-sd = "0.17"
 # Identifiers
 uuid = { version = "1", features = ["v4", "serde"] }
 
-# WebRTC data channels (cross-network sync)
-datachannel = { version = "0.16", features = ["vendored"] }
-
-# SDP parsing (re-export from datachannel)
-webrtc-sdp = "0.3"
-
 # Base64 encoding for signaling wire format
 base64 = "0.22"
 
@@ -67,11 +61,13 @@ chrono = "0.4"
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
-# Desktop-only: Audio capture, local Whisper, global shortcut
+# Desktop-only: Audio capture, local Whisper, global shortcut, WebRTC
 [target.'cfg(not(any(target_os = "ios", target_os = "android")))'.dependencies]
 cpal = "0.15"
 whisper-rs = "0.14"
 tauri-plugin-global-shortcut = "2"
+datachannel = { version = "0.16", features = ["vendored"] }
+webrtc-sdp = "0.3"
 
 # macOS/iOS: Security.framework for Keychain
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
