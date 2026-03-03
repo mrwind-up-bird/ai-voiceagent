@@ -29,7 +29,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://api.openai.com https://api.anthropic.com https://api.deepgram.com wss://api.deepgram.com https://api.assemblyai.com https://huggingface.co; font-src 'self'"
     },
     "macOSPrivateApi": true
   },

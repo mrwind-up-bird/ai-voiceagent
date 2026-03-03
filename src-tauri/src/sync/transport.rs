@@ -39,6 +39,8 @@ const SESSION_MAX_DURATION: Duration = Duration::from_secs(4 * 60 * 60);
 const SESSION_WARNING_BEFORE: Duration = Duration::from_secs(15 * 60);
 /// Key rotation interval — rotate encryption key every 30 minutes.
 const KEY_ROTATION_INTERVAL: Duration = Duration::from_secs(30 * 60);
+/// Maximum sync message size (5MB) — reject oversized messages.
+const MAX_SYNC_MESSAGE_SIZE: usize = 5 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Wire protocol messages
@@ -483,16 +485,56 @@ where
 
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
+                        if text.len() > MAX_SYNC_MESSAGE_SIZE {
+                            tracing::warn!("Oversized sync message ({} bytes), dropping", text.len());
+                            continue;
+                        }
                         match serde_json::from_str::<SyncMessage>(&text) {
                             Ok(SyncMessage::Update { envelope }) => {
                                 match encryption.decrypt(&envelope) {
-                                    Ok(update_bytes) => {
-                                        let doc_guard = doc.lock().await;
-                                        if let Err(e) = doc_guard.apply_update(&update_bytes) {
-                                            tracing::warn!("Failed to apply sync update: {}", e);
+                                    Ok(decrypted_bytes) => {
+                                        // Try parsing as a control message first
+                                        if let Ok(inner_msg) = serde_json::from_slice::<SyncMessage>(&decrypted_bytes) {
+                                            match inner_msg {
+                                                SyncMessage::Heartbeat { .. } => {
+                                                    // Peer is alive — last_peer_activity already updated
+                                                }
+                                                SyncMessage::KeyRotate { epoch } => {
+                                                    if epoch > key_rotation_epoch {
+                                                        encryption.rotate_key()
+                                                            .map_err(|e| format!("Key rotation failed: {}", e))?;
+                                                        key_rotation_epoch = epoch;
+                                                        last_key_rotation = Instant::now();
+                                                        tracing::info!(
+                                                            "Key rotated to epoch {} (triggered by peer)",
+                                                            epoch
+                                                        );
+                                                    }
+                                                }
+                                                SyncMessage::Goodbye => {
+                                                    tracing::info!("Peer disconnected gracefully");
+                                                    break;
+                                                }
+                                                _ => {
+                                                    // Not a control message — treat as yrs update
+                                                    let doc_guard = doc.lock().await;
+                                                    if let Err(e) = doc_guard.apply_update(&decrypted_bytes) {
+                                                        tracing::warn!("Failed to apply sync update: {}", e);
+                                                    } else {
+                                                        let snapshot = doc_guard.snapshot();
+                                                        app.emit("sync-state-updated", &snapshot).ok();
+                                                    }
+                                                }
+                                            }
                                         } else {
-                                            let snapshot = doc_guard.snapshot();
-                                            app.emit("sync-state-updated", &snapshot).ok();
+                                            // Not valid JSON — treat as raw yrs update bytes
+                                            let doc_guard = doc.lock().await;
+                                            if let Err(e) = doc_guard.apply_update(&decrypted_bytes) {
+                                                tracing::warn!("Failed to apply sync update: {}", e);
+                                            } else {
+                                                let snapshot = doc_guard.snapshot();
+                                                app.emit("sync-state-updated", &snapshot).ok();
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -500,28 +542,9 @@ where
                                     }
                                 }
                             }
-                            Ok(SyncMessage::Heartbeat { .. }) => {
-                                // Peer is alive — last_peer_activity already updated
-                            }
-                            Ok(SyncMessage::KeyRotate { epoch }) => {
-                                // Peer rotated their key — we must rotate too
-                                if epoch > key_rotation_epoch {
-                                    encryption.rotate_key()
-                                        .map_err(|e| format!("Key rotation failed: {}", e))?;
-                                    key_rotation_epoch = epoch;
-                                    last_key_rotation = Instant::now();
-                                    tracing::info!(
-                                        "Key rotated to epoch {} (triggered by peer)",
-                                        epoch
-                                    );
-                                }
-                            }
-                            Ok(SyncMessage::Goodbye) => {
-                                tracing::info!("Peer disconnected gracefully");
-                                break;
-                            }
                             Ok(_) => {
-                                // Ignore unexpected message types in sync loop
+                                // Ignore unexpected plaintext message types in sync loop
+                                // (Heartbeat/KeyRotate/Goodbye now arrive encrypted inside Update)
                             }
                             Err(e) => {
                                 tracing::warn!("Failed to parse sync message: {}", e);
@@ -561,8 +584,12 @@ where
                         }
                     }
                     None => {
-                        // Channel closed (TransportHandle dropped) — send goodbye
-                        let _ = send_msg(&mut ws_write, &SyncMessage::Goodbye).await;
+                        // Channel closed (TransportHandle dropped) — send encrypted goodbye
+                        if let Ok(goodbye_json) = serde_json::to_vec(&SyncMessage::Goodbye) {
+                            if let Ok(envelope) = encryption.encrypt(&goodbye_json) {
+                                let _ = send_msg(&mut ws_write, &SyncMessage::Update { envelope }).await;
+                            }
+                        }
                         break;
                     }
                 }
@@ -580,11 +607,15 @@ where
                     break;
                 }
 
-                // --- Send heartbeat ---
+                // --- Send heartbeat (encrypted) ---
                 let hb = SyncMessage::Heartbeat {
                     timestamp: chrono::Utc::now().timestamp(),
                 };
-                if send_msg(&mut ws_write, &hb).await.is_err() {
+                let hb_json = serde_json::to_vec(&hb)
+                    .map_err(|e| format!("Failed to serialize heartbeat: {}", e))?;
+                let hb_envelope = encryption.encrypt(&hb_json)
+                    .map_err(|e| format!("Failed to encrypt heartbeat: {}", e))?;
+                if send_msg(&mut ws_write, &SyncMessage::Update { envelope: hb_envelope }).await.is_err() {
                     tracing::error!("Sync transport: failed to send heartbeat");
                     break;
                 }
@@ -594,7 +625,11 @@ where
                 if elapsed >= SESSION_MAX_DURATION {
                     tracing::info!("Session timeout reached (4h) — disconnecting");
                     app.emit("sync-session-timeout", ()).ok();
-                    let _ = send_msg(&mut ws_write, &SyncMessage::Goodbye).await;
+                    if let Ok(goodbye_json) = serde_json::to_vec(&SyncMessage::Goodbye) {
+                        if let Ok(envelope) = encryption.encrypt(&goodbye_json) {
+                            let _ = send_msg(&mut ws_write, &SyncMessage::Update { envelope }).await;
+                        }
+                    }
                     break;
                 }
                 if !session_warning_sent && elapsed >= session_warning_at {
@@ -610,11 +645,15 @@ where
                 // --- Forward secrecy: key rotation ---
                 if last_key_rotation.elapsed() >= KEY_ROTATION_INTERVAL {
                     key_rotation_epoch += 1;
-                    // Notify peer BEFORE rotating (WebSocket is ordered)
+                    // Notify peer BEFORE rotating (WebSocket is ordered), encrypted
                     let rotate_msg = SyncMessage::KeyRotate {
                         epoch: key_rotation_epoch,
                     };
-                    if send_msg(&mut ws_write, &rotate_msg).await.is_err() {
+                    let rotate_json = serde_json::to_vec(&rotate_msg)
+                        .map_err(|e| format!("Failed to serialize key rotation: {}", e))?;
+                    let rotate_envelope = encryption.encrypt(&rotate_json)
+                        .map_err(|e| format!("Failed to encrypt key rotation: {}", e))?;
+                    if send_msg(&mut ws_write, &SyncMessage::Update { envelope: rotate_envelope }).await.is_err() {
                         tracing::error!("Failed to send key rotation notification");
                         break;
                     }

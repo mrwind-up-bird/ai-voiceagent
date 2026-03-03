@@ -64,20 +64,16 @@ export function VoiceInput() {
           setRecordingState('recording');
           useLocalWhisperRef.current = false;
 
-          // Start Deepgram stream first (if API key exists)
+          // Start Deepgram stream first (backend fetches API key from keychain)
           try {
             const { invoke } = await import('@tauri-apps/api/core');
-            const apiKey = await invoke<string | null>('get_api_key', { keyType: 'deepgram' });
-            if (apiKey) {
-              await invoke('start_deepgram_stream', { apiKey });
-            } else {
-              // No Deepgram key — will use local Whisper on stop
-              useLocalWhisperRef.current = true;
-            }
+            await invoke('start_deepgram_stream');
           } catch (err) {
-            // Tauri not available — use local Whisper
+            // Deepgram key missing or Tauri not available — use local Whisper
             useLocalWhisperRef.current = true;
-            console.log('[VoiceInput] No Tauri, will use local Whisper');
+            if (process.env.NODE_ENV === 'development') {
+              console.log('[VoiceInput] Deepgram unavailable, will use local Whisper:', err);
+            }
           }
 
           // Start Web Audio capture (sends chunks to Rust or buffers for Whisper)
@@ -96,15 +92,14 @@ export function VoiceInput() {
       } else {
         setRecordingState('recording');
 
-        // Start Deepgram stream first (if API key exists)
+        // Start Deepgram stream (backend fetches API key from keychain)
         try {
-          const apiKey = await invoke<string | null>('get_api_key', { keyType: 'deepgram' });
-          if (apiKey) {
+          if (process.env.NODE_ENV === 'development') {
             console.log('[VoiceInput] Starting Deepgram stream...');
-            await invoke('start_deepgram_stream', { apiKey });
+          }
+          await invoke('start_deepgram_stream');
+          if (process.env.NODE_ENV === 'development') {
             console.log('[VoiceInput] Deepgram stream started');
-          } else {
-            console.log('[VoiceInput] No Deepgram API key, skipping transcription');
           }
         } catch (err) {
           console.error('[VoiceInput] Failed to start Deepgram:', err);

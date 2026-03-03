@@ -67,91 +67,57 @@ export function AgentSelector() {
       try {
         const { invoke } = await import('@tauri-apps/api/core');
 
-        // Get API keys
-        const openaiKey = await invoke<string | null>('get_api_key', { keyType: 'openai' });
-        const anthropicKey = await invoke<string | null>('get_api_key', { keyType: 'anthropic' });
-
         switch (agentId) {
           case 'action-items':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Action Items');
-            }
             await invoke('extract_action_items', {
-              apiKey: openaiKey,
               transcript,
             });
             break;
 
-          case 'tone-shifter':
-            if (!anthropicKey) {
-              throw new Error('Anthropic API key required for Tone Shifter');
-            }
+          case 'tone-shifter': {
             const { selectedTone, toneIntensity } = useVoiceStore.getState();
             await invoke('shift_tone_streaming', {
-              apiKey: anthropicKey,
               text: transcript,
               targetTone: selectedTone,
               intensity: toneIntensity,
             });
             break;
+          }
 
           case 'music-matcher':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Music Matcher');
-            }
             // First analyze mood, then match music
             await invoke('analyze_mood_from_transcript', {
-              openaiKey,
               transcript,
             });
-            const qrecordsKey = await invoke<string | null>('get_api_key', { keyType: 'qrecords' });
-            if (qrecordsKey) {
-              await invoke('match_music', {
-                apiKey: qrecordsKey,
-                request: { query: transcript },
-              });
-            }
+            await invoke('match_music', {
+              request: { query: transcript },
+            });
             break;
 
-          case 'translator':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Translator');
-            }
+          case 'translator': {
             const { selectedSourceLanguage, selectedTargetLanguage } = useVoiceStore.getState();
             await invoke('translate_text_streaming', {
-              apiKey: openaiKey,
               text: transcript,
               sourceLanguage: selectedSourceLanguage,
               targetLanguage: selectedTargetLanguage,
             });
             break;
+          }
 
           case 'dev-log':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Dev-Log');
-            }
             await invoke('generate_dev_log_streaming', {
-              apiKey: openaiKey,
               transcript,
             });
             break;
 
           case 'brain-dump':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Brain Dump');
-            }
             await invoke('process_brain_dump_streaming', {
-              apiKey: openaiKey,
               transcript,
             });
             break;
 
           case 'mental-mirror':
-            if (!openaiKey) {
-              throw new Error('OpenAI API key required for Letter to Myself');
-            }
             await invoke('generate_mental_mirror_streaming', {
-              apiKey: openaiKey,
               transcript,
             });
             break;

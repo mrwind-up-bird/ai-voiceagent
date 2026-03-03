@@ -97,16 +97,8 @@ function useOutputTranslation(originalText: string | null) {
     setIsTranslating(true);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const openaiKey = await invoke<string | null>('get_api_key', { keyType: 'openai' });
-
-      if (!openaiKey) {
-        console.error('OpenAI API key required for translation');
-        setIsTranslating(false);
-        return;
-      }
 
       const result = await invoke<{ translated: string }>('translate_text', {
-        apiKey: openaiKey,
         text,
         sourceLanguage: 'auto',
         targetLanguage: lang,
@@ -498,7 +490,7 @@ function MusicMatchDisplay({
                 key={track.id}
                 className="flex items-center gap-3 p-2 rounded hover:bg-voice-surface/50 transition-colors"
               >
-                {track.cover_art_url ? (
+                {track.cover_art_url && (track.cover_art_url.startsWith('https://') || track.cover_art_url.startsWith('data:image/')) ? (
                   <img
                     src={track.cover_art_url}
                     alt={track.title}

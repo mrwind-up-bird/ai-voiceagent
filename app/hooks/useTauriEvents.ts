@@ -194,7 +194,9 @@ export function useTauriEvents() {
         const unlistenRecordingSaved = await listen<{ filepath: string; duration_secs: number }>(
           'recording-saved',
           (event) => {
-            console.log('Recording saved:', event.payload.filepath);
+            if (process.env.NODE_ENV === 'development') {
+              console.log('Recording saved:', event.payload.filepath);
+            }
           }
         );
         listeners.push(unlistenRecordingSaved);
@@ -220,7 +222,9 @@ export function useTauriEvents() {
         // Silence detection
         const unlistenSilence = await listen('silence-detected', () => {
           // Optionally auto-stop recording on extended silence
-          console.log('Silence detected');
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Silence detected');
+          }
         });
         listeners.push(unlistenSilence);
 
@@ -292,7 +296,9 @@ export function useTauriEvents() {
 
         // Deepgram connection
         const unlistenDeepgramConnected = await listen('deepgram-connected', () => {
-          console.log('Deepgram WebSocket connected');
+          if (process.env.NODE_ENV === 'development') {
+            console.log('Deepgram WebSocket connected');
+          }
         });
         listeners.push(unlistenDeepgramConnected);
 
@@ -401,7 +407,9 @@ export function useTauriEvents() {
         listeners.push(unlistenMentalMirrorComplete);
       } catch (error) {
         // Running outside Tauri (e.g., in browser dev mode)
-        console.log('Tauri events not available:', error);
+        if (process.env.NODE_ENV === 'development') {
+          console.log('Tauri events not available:', error);
+        }
       }
     }
 

@@ -142,6 +142,10 @@ impl Default for SyncState {
 impl Drop for SyncState {
     fn drop(&mut self) {
         // Zero sensitive material on drop — defence in depth.
+        if let Some(ref mut code) = self.pairing_code {
+            use zeroize::Zeroize;
+            code.zeroize();
+        }
         self.pairing_code = None;
         self.transport = None;
         self.discovery = None;
@@ -255,8 +259,9 @@ pub async fn create_sync_session(
                 s.device_id.clone()
             };
 
+            let signaling_url = get_signaling_url();
             match establish_webrtc_transport(
-                DEFAULT_SIGNALING_URL,
+                &signaling_url,
                 &webrtc_pairing_code,
                 &device_id,
                 true, // creator
@@ -387,7 +392,7 @@ pub async fn join_sync_session(
     drop(s);
 
     app.emit("sync-status-changed", &event).map_err(|e| e.to_string())?;
-    tracing::info!("Joining sync session with code: {}", pairing_code);
+    tracing::info!("Joining sync session with code: [REDACTED]");
 
     // Spawn background discovery + connection task
     let sync_state = state.inner().clone();
@@ -486,6 +491,15 @@ pub async fn sync_update_agent_result(
     result: String,
     state: tauri::State<'_, SyncManager>,
 ) -> Result<(), String> {
+    const VALID_AGENT_NAMES: &[&str] = &[
+        "action_items", "tone_shifter", "music_matcher",
+        "translator", "dev_log", "brain_dump", "mental_mirror",
+    ];
+
+    if !VALID_AGENT_NAMES.contains(&agent.as_str()) {
+        return Err(format!("Invalid agent name: {}", agent));
+    }
+
     let (doc, transport) = {
         let s = state.lock().await;
         if s.status != SyncStatus::Connected {
@@ -509,33 +523,95 @@ pub async fn sync_update_agent_result(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Generate a human-readable pairing code: "digit-word-word" (e.g. "7-violet-castle").
+/// Generate a human-readable pairing code: "NNNNNN-adjective-noun"
+/// (e.g. "384729-amber-castle").
+///
+/// Entropy: 10^6 PINs × 256 adjectives × 256 nouns ≈ 65 billion combos (~36 bits).
 fn generate_pairing_code() -> String {
     use rand::Rng;
 
     const ADJECTIVES: &[&str] = &[
-        "amber", "azure", "coral", "crimson", "golden", "ivory",
-        "jade", "lemon", "lilac", "olive", "peach", "plum",
-        "rose", "ruby", "sage", "silver", "teal", "violet",
+        "amber", "arctic", "ashen", "auburn", "azure", "bitter", "blazing", "bleak",
+        "blush", "bold", "brash", "brazen", "bright", "brittle", "bronze", "calm",
+        "cedar", "chill", "chrome", "cinder", "civic", "clear", "clever", "clover",
+        "cobalt", "cocoa", "coral", "cosmic", "cotton", "covert", "crisp", "cruel",
+        "crystal", "cyan", "dainty", "dapple", "dark", "dawn", "deep", "deft",
+        "dense", "dim", "divine", "dizzy", "drift", "droll", "dry", "dull",
+        "dune", "dusky", "dusty", "eager", "early", "earthy", "ebony", "elder",
+        "ember", "epic", "equal", "even", "faded", "faint", "fair", "fallow",
+        "fawn", "fern", "fierce", "fiery", "fine", "firm", "fleet", "flint",
+        "flora", "flush", "foggy", "fond", "forge", "formal", "fossil", "frank",
+        "fresh", "frigid", "frost", "frozen", "full", "fuzzy", "garnet", "gentle",
+        "ghost", "giddy", "gilt", "glad", "glass", "gleam", "glint", "global",
+        "golden", "grand", "granite", "grape", "gravel", "green", "grim", "grove",
+        "hazel", "heavy", "hemp", "hidden", "hollow", "honey", "humble", "hushed",
+        "icy", "idle", "indigo", "inner", "iron", "ivory", "jade", "jagged",
+        "jolly", "keen", "khaki", "kind", "lace", "lapis", "lark", "lavish",
+        "lean", "lemon", "level", "light", "lilac", "linen", "liquid", "lively",
+        "local", "lone", "lucid", "lunar", "lush", "malt", "maple", "marine",
+        "marsh", "matte", "mauve", "meek", "mellow", "mercy", "mesa", "mild",
+        "mint", "misty", "mocha", "modest", "molten", "mossy", "muted", "mystic",
+        "navy", "neat", "nickel", "nimble", "noble", "north", "novel", "nutmeg",
+        "oaken", "ochre", "olive", "onyx", "opal", "outer", "pale", "pastel",
+        "peach", "pearl", "pewter", "pine", "plain", "plum", "polar", "polite",
+        "poppy", "prim", "prism", "proud", "pure", "quaint", "quiet", "rapid",
+        "raven", "raw", "regal", "rigid", "ripe", "robin", "rocky", "rosy",
+        "rough", "round", "royal", "ruby", "ruddy", "rugged", "russet", "rustic",
+        "sage", "satin", "scarlet", "serene", "shadow", "sheer", "shell", "shore",
+        "shy", "sienna", "silk", "silver", "simple", "slate", "sleek", "sleet",
+        "slim", "slow", "smoke", "snowy", "sober", "soft", "solar", "solid",
+        "somber", "south", "spice", "stark", "steady", "steel", "steep", "still",
+        "stone", "stout", "subtle", "sunny", "super", "swift", "tawny", "teal",
+        "tepid", "thick", "thin", "thorn", "tidal", "timber", "topaz", "vivid",
     ];
+
     const NOUNS: &[&str] = &[
-        "arrow", "badge", "candle", "castle", "cliff", "crown",
-        "delta", "ember", "falcon", "forge", "harbor", "lantern",
-        "maple", "nexus", "orbit", "prism", "quartz", "ridge",
-        "spark", "storm", "summit", "torch", "vault", "zenith",
+        "acorn", "agate", "alcove", "anchor", "anvil", "arbor", "arrow", "atlas",
+        "badge", "basin", "basalt", "beacon", "blade", "bloom", "bluff", "bolt",
+        "bower", "bridge", "brook", "bugle", "cairn", "canal", "candle", "canyon",
+        "cargo", "castle", "cavern", "cedar", "chalk", "chasm", "cipher", "citrus",
+        "cliff", "cloud", "coast", "cobble", "comet", "coral", "cove", "crane",
+        "crest", "crown", "crystal", "delta", "depot", "dew", "dock", "dome",
+        "drift", "drum", "dune", "eagle", "echo", "ember", "engine", "epoch",
+        "falcon", "fern", "field", "fjord", "flame", "flare", "fleet", "flint",
+        "forge", "fossil", "frost", "gale", "garden", "garnet", "gate", "geyser",
+        "glacier", "glen", "globe", "gorge", "grain", "grove", "gully", "hammer",
+        "harbor", "haven", "hawk", "hearth", "hedge", "heron", "hillock", "hollow",
+        "horn", "inlet", "iris", "island", "ivory", "jasper", "jetty", "jewel",
+        "jungle", "kelp", "kernel", "kettle", "knoll", "lagoon", "lance", "lantern",
+        "larch", "lasso", "lattice", "laurel", "ledge", "lever", "linden", "lodge",
+        "lotus", "mantle", "maple", "marble", "marsh", "mason", "meadow", "mesa",
+        "meteor", "mill", "mirror", "moat", "mortar", "mosaic", "mound", "myth",
+        "needle", "nexus", "notch", "novel", "oasis", "ocean", "olive", "onyx",
+        "orbit", "otter", "outcrop", "oyster", "paddle", "pagoda", "palm", "pass",
+        "pebble", "perch", "petal", "pier", "pike", "pillar", "pine", "pivot",
+        "plain", "plume", "point", "pond", "portal", "prism", "pulse", "quarry",
+        "quartz", "quill", "raft", "rail", "range", "rapids", "ravine", "realm",
+        "reed", "reef", "ridge", "river", "robin", "rocket", "rune", "saddle",
+        "sage", "sail", "salmon", "sandal", "sentry", "sequoia", "shell", "shield",
+        "shrine", "sierra", "signal", "silver", "sketch", "slate", "slope", "snare",
+        "solar", "spark", "spire", "spring", "spruce", "spur", "staff", "stake",
+        "stone", "storm", "strand", "stream", "summit", "sundial", "surge", "swift",
+        "tarn", "temple", "terrace", "thicket", "thistle", "thorn", "tide", "timber",
+        "token", "torch", "tower", "trail", "trench", "trellis", "trident", "tundra",
+        "turret", "valley", "vault", "vertex", "vessel", "vigil", "vine", "vista",
+        "vortex", "warden", "wedge", "wharf", "willow", "zenith", "zephyr", "zodiac",
     ];
 
     let mut rng = rand::thread_rng();
-    let digit = rng.gen_range(2..10); // 2-9 (avoid 0/1 ambiguity)
+    let pin: u32 = rng.gen_range(0..1_000_000);
     let adj = ADJECTIVES[rng.gen_range(0..ADJECTIVES.len())];
     let noun = NOUNS[rng.gen_range(0..NOUNS.len())];
 
-    format!("{}-{}-{}", digit, adj, noun)
+    format!("{:06}-{}-{}", pin, adj, noun)
 }
 
-/// Default signaling server URL (can be overridden).
+/// Default signaling server URL. Override with AURUS_SIGNALING_URL env var.
 #[cfg(not(any(target_os = "ios", target_os = "android")))]
-const DEFAULT_SIGNALING_URL: &str = "ws://localhost:8765/ws";
+fn get_signaling_url() -> String {
+    std::env::var("AURUS_SIGNALING_URL")
+        .unwrap_or_else(|_| "wss://signal.aurus.app/ws".to_string())
+}
 
 /// Discover a creator via mDNS (5s) and connect, or fall back to WebRTC signaling.
 async fn discover_and_connect(
@@ -572,8 +648,9 @@ async fn discover_and_connect(
             s.device_id.clone()
         };
 
+        let signaling_url = get_signaling_url();
         let (sink, stream, encryption, session) = establish_webrtc_transport(
-            DEFAULT_SIGNALING_URL,
+            &signaling_url,
             &pairing_code,
             &device_id,
             false, // joiner
@@ -708,11 +785,20 @@ mod tests {
     fn test_pairing_code_format() {
         let code = generate_pairing_code();
         let parts: Vec<&str> = code.split('-').collect();
-        assert_eq!(parts.len(), 3, "code should be digit-word-word");
-        let digit: u8 = parts[0].parse().expect("first part should be a digit");
-        assert!(digit >= 2 && digit <= 9);
-        assert!(!parts[1].is_empty());
-        assert!(!parts[2].is_empty());
+        assert_eq!(parts.len(), 3, "code should be NNNNNN-adjective-noun");
+        let pin: u32 = parts[0].parse().expect("first part should be a 6-digit PIN");
+        assert!(pin < 1_000_000, "PIN must be < 1,000,000");
+        assert_eq!(parts[0].len(), 6, "PIN must be zero-padded to 6 digits");
+        assert!(!parts[1].is_empty(), "adjective must not be empty");
+        assert!(!parts[2].is_empty(), "noun must not be empty");
+    }
+
+    #[test]
+    fn test_pairing_code_entropy() {
+        // Generate multiple codes and verify they're not all the same
+        let codes: Vec<String> = (0..10).map(|_| generate_pairing_code()).collect();
+        let unique: std::collections::HashSet<&String> = codes.iter().collect();
+        assert!(unique.len() > 1, "Pairing codes should have randomness");
     }
 
     #[test]
@@ -731,7 +817,7 @@ mod tests {
     fn test_sync_state_reset() {
         let mut state = SyncState::default();
         state.session_id = Some("test-session".to_string());
-        state.pairing_code = Some("3-azure-prism".to_string());
+        state.pairing_code = Some("384729-azure-prism".to_string());
         state.status = SyncStatus::Connected;
 
         state.reset_session();

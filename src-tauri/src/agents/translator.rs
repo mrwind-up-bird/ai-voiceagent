@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 /// Supported languages for translation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,11 +133,14 @@ Guidelines:
 #[tauri::command]
 pub async fn translate_text(
     app: AppHandle,
-    api_key: String,
     text: String,
     source_language: Language,
     target_language: Language,
 ) -> Result<TranslationResult, String> {
+    if text.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Text too long ({} chars, max {})", text.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
@@ -161,11 +165,15 @@ pub async fn translate_text(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Translation API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Translation API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let response_json: serde_json::Value = response
@@ -199,11 +207,14 @@ pub async fn translate_text(
 #[tauri::command]
 pub async fn translate_text_streaming(
     app: AppHandle,
-    api_key: String,
     text: String,
     source_language: Language,
     target_language: Language,
 ) -> Result<(), String> {
+    if text.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Text too long ({} chars, max {})", text.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
@@ -229,11 +240,15 @@ pub async fn translate_text_streaming(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Translation streaming API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Translation streaming API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let _ = app.emit("translation-started", ());

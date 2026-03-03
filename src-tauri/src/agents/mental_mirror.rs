@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MentalMirrorResult {
@@ -77,9 +78,12 @@ IMPORTANT: Return ONLY valid JSON, no markdown code blocks or explanations."#;
 #[tauri::command]
 pub async fn generate_mental_mirror(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<MentalMirrorResult, String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     if transcript.trim().is_empty() {
         return Err("Please share your thoughts first. Your reflection space is ready when you are.".to_string());
     }
@@ -109,11 +113,15 @@ pub async fn generate_mental_mirror(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Mental mirror API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Mental mirror API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let response_json: serde_json::Value = response
@@ -136,9 +144,12 @@ pub async fn generate_mental_mirror(
 #[tauri::command]
 pub async fn generate_mental_mirror_streaming(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<(), String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     if transcript.trim().is_empty() {
         return Err("Please share your thoughts first. Your reflection space is ready when you are.".to_string());
     }
@@ -170,11 +181,15 @@ pub async fn generate_mental_mirror_streaming(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Mental mirror streaming API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Mental mirror streaming API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let mut stream = response.bytes_stream();

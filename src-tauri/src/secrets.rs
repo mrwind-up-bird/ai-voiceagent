@@ -11,6 +11,14 @@
 
 use crate::platform::secrets::{get_storage, is_valid_key_type, SecureStorage, VALID_KEY_TYPES};
 
+/// Internal helper: fetch an API key from secure storage or return an error.
+/// Used by agent and transcription commands to avoid receiving keys from the frontend.
+pub(crate) fn get_key_or_error(key_type: &str) -> Result<String, String> {
+    let storage = get_storage();
+    storage.get(key_type)?
+        .ok_or_else(|| format!("API key '{}' not configured. Please add it in Settings.", key_type))
+}
+
 /// Store an API key securely in the system keychain/keystore
 #[tauri::command]
 pub async fn set_api_key(key_type: String, value: String) -> Result<(), String> {

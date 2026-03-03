@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionItem {
@@ -54,9 +55,12 @@ Be thorough but precise. Only include clear action items, not general discussion
 #[tauri::command]
 pub async fn extract_action_items(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<ActionItemsResult, String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
@@ -82,11 +86,15 @@ pub async fn extract_action_items(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Action items API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Action items API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let openai_response: OpenAiResponse = response
@@ -112,13 +120,15 @@ pub async fn extract_action_items(
 #[tauri::command]
 pub async fn extract_action_items_streaming(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<(), String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
     // For streaming, we'll use the non-streaming endpoint but emit progress
     let _ = app.emit("action-items-processing", ());
 
-    let result = extract_action_items(app.clone(), api_key, transcript).await?;
+    let result = extract_action_items(app.clone(), transcript).await?;
 
     let _ = app.emit("action-items-complete", &result);
 

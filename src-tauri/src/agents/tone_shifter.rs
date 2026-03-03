@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToneShiftRequest {
@@ -121,12 +122,15 @@ Respond with ONLY the rewritten text, no explanations or preamble."#,
 #[tauri::command]
 pub async fn shift_tone(
     app: AppHandle,
-    api_key: String,
     text: String,
     target_tone: ToneType,
     intensity: Option<u8>,
     length_adjustment: Option<i8>,
 ) -> Result<ToneShiftResult, String> {
+    if text.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Text too long ({} chars, max {})", text.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("anthropic")?;
     let intensity = intensity.unwrap_or(5).clamp(1, 10);
     let length_adjustment = length_adjustment.unwrap_or(0).clamp(-50, 100);
     let client = reqwest::Client::new();
@@ -157,11 +161,15 @@ pub async fn shift_tone(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Tone shift API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("Anthropic API error: {}", error_text));
+        tracing::error!("Tone shift API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let response_json: serde_json::Value = response
@@ -189,12 +197,15 @@ pub async fn shift_tone(
 #[tauri::command]
 pub async fn shift_tone_streaming(
     app: AppHandle,
-    api_key: String,
     text: String,
     target_tone: ToneType,
     intensity: Option<u8>,
     length_adjustment: Option<i8>,
 ) -> Result<(), String> {
+    if text.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Text too long ({} chars, max {})", text.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("anthropic")?;
     let intensity = intensity.unwrap_or(5).clamp(1, 10);
     let length_adjustment = length_adjustment.unwrap_or(0).clamp(-50, 100);
     let client = reqwest::Client::new();
@@ -226,11 +237,15 @@ pub async fn shift_tone_streaming(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Tone shift streaming API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("Anthropic API error: {}", error_text));
+        tracing::error!("Tone shift streaming API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let _ = app.emit("tone-shift-started", ());

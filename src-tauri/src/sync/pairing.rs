@@ -42,13 +42,14 @@ impl PairingCreator {
 
     /// Finish the exchange with the joiner's inbound message.
     /// Returns a `SessionEncryption` initialised with the derived shared key.
+    /// Creator uses `is_creator: true` for direction-specific keys.
     pub fn finish(self, joiner_msg: &[u8]) -> Result<SessionEncryption, String> {
         let shared_key = self
             .state
             .finish(joiner_msg)
             .map_err(|e| format!("SPAKE2 key exchange failed: {:?}", e))?;
 
-        SessionEncryption::from_shared_secret(&shared_key)
+        SessionEncryption::from_shared_secret(&shared_key, true)
     }
 }
 
@@ -80,13 +81,14 @@ impl PairingJoiner {
 
     /// Finish the exchange with the creator's inbound message.
     /// Returns a `SessionEncryption` initialised with the derived shared key.
+    /// Joiner uses `is_creator: false` for direction-specific keys.
     pub fn finish(self, creator_msg: &[u8]) -> Result<SessionEncryption, String> {
         let shared_key = self
             .state
             .finish(creator_msg)
             .map_err(|e| format!("SPAKE2 key exchange failed: {:?}", e))?;
 
-        SessionEncryption::from_shared_secret(&shared_key)
+        SessionEncryption::from_shared_secret(&shared_key, false)
     }
 }
 
@@ -112,11 +114,16 @@ mod tests {
         let creator_enc = creator.finish(&joiner_msg).unwrap();
         let joiner_enc = joiner.finish(&creator_msg).unwrap();
 
-        // Both sides should be able to encrypt/decrypt each other's messages
+        // Creator → Joiner should work
         let plaintext = b"sync payload test";
         let envelope = creator_enc.encrypt(plaintext).unwrap();
         let decrypted = joiner_enc.decrypt(&envelope).unwrap();
         assert_eq!(decrypted, plaintext);
+
+        // Joiner → Creator should also work
+        let envelope2 = joiner_enc.encrypt(b"reply").unwrap();
+        let decrypted2 = creator_enc.decrypt(&envelope2).unwrap();
+        assert_eq!(decrypted2, b"reply");
     }
 
     #[test]

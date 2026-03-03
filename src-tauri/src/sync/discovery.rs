@@ -46,13 +46,13 @@ impl SyncDiscovery {
     pub fn announce(
         &mut self,
         port: u16,
-        device_name: &str,
+        _device_name: &str,
         session_fingerprint: &str,
     ) -> Result<(), String> {
-        let hostname = format!("aurus-{}.local.", &uuid::Uuid::new_v4().to_string()[..8]);
+        let instance_name = format!("aurus-{}", &uuid::Uuid::new_v4().to_string()[..8]);
+        let hostname = format!("{}.local.", &instance_name);
 
         let properties: HashMap<String, String> = [
-            ("device".to_string(), device_name.to_string()),
             ("fingerprint".to_string(), session_fingerprint.to_string()),
             ("version".to_string(), "1".to_string()),
         ]
@@ -61,7 +61,7 @@ impl SyncDiscovery {
 
         let service_info = ServiceInfo::new(
             SERVICE_TYPE,
-            device_name,
+            &instance_name,
             &hostname,
             "",       // empty = auto-detect local IP
             port,

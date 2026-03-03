@@ -7,11 +7,14 @@
 //! Cipher: AES-256-GCM via the `ring` crate.
 //! Key derivation: HKDF-SHA256 from a shared secret.
 //! Nonces: 96-bit, counter-based (monotonically increasing per session).
+//! Direction: Separate keys for creator→joiner and joiner→creator to prevent
+//!   nonce reuse if both sides send simultaneously.
 
 use ring::aead::{self, Aad, BoundKey, Nonce, NonceSequence, SealingKey, OpeningKey, UnboundKey, NONCE_LEN};
 use ring::hkdf;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
+use zeroize::Zeroizing;
 
 /// An encrypted sync message sent over the wire.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,33 +26,70 @@ pub struct EncryptedEnvelope {
 }
 
 /// Session encryption state. Created after SPAKE2+ key exchange completes.
+///
+/// Uses direction-specific keys: the creator and joiner derive different
+/// send/recv key pairs from the same shared secret, preventing nonce reuse
+/// when both sides send simultaneously.
 pub struct SessionEncryption {
-    /// Raw shared secret from SPAKE2+ (32 bytes).
-    shared_secret: Vec<u8>,
-    /// Derived 256-bit encryption key material.
-    key_material: Vec<u8>,
-    /// Monotonically increasing counter for nonce generation.
+    /// Key this side uses for SENDING (sealing).
+    send_key: Zeroizing<Vec<u8>>,
+    /// Key this side uses for RECEIVING (opening).
+    recv_key: Zeroizing<Vec<u8>>,
+    /// Monotonically increasing counter for nonce generation (send direction only).
     seal_counter: AtomicU64,
+    /// Highest counter seen from remote peer (for replay protection).
+    /// Initialised to u64::MAX as sentinel meaning "no messages received yet".
+    max_recv_counter: AtomicU64,
+    /// Whether this side is the creator (needed for AAD direction).
+    is_creator: bool,
 }
 
 impl SessionEncryption {
     /// Create from a shared secret (e.g. output of SPAKE2+ key exchange).
-    /// The secret is expanded via HKDF-SHA256 into a 256-bit AES key.
-    pub fn from_shared_secret(secret: &[u8]) -> Result<Self, String> {
+    /// The secret is expanded via HKDF-SHA256 into two 256-bit AES keys:
+    /// one for creator→joiner and one for joiner→creator.
+    ///
+    /// `is_creator` determines which key is used for sending vs receiving.
+    pub fn from_shared_secret(secret: &[u8], is_creator: bool) -> Result<Self, String> {
         let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, b"aurus-sync-v1");
         let prk = salt.extract(secret);
 
-        let mut key_material = vec![0u8; 32];
-        prk.expand(&[b"aes-256-gcm-key"], HkdfLen(32))
-            .map_err(|_| "HKDF expand failed".to_string())?
-            .fill(&mut key_material)
-            .map_err(|_| "HKDF fill failed".to_string())?;
+        // Derive creator-to-joiner key
+        let mut c2j_key = Zeroizing::new(vec![0u8; 32]);
+        prk.expand(&[b"aurus-sync-v1-c2j"], HkdfLen(32))
+            .map_err(|_| "HKDF expand failed (c2j)".to_string())?
+            .fill(&mut c2j_key)
+            .map_err(|_| "HKDF fill failed (c2j)".to_string())?;
+
+        // Derive joiner-to-creator key
+        let mut j2c_key = Zeroizing::new(vec![0u8; 32]);
+        prk.expand(&[b"aurus-sync-v1-j2c"], HkdfLen(32))
+            .map_err(|_| "HKDF expand failed (j2c)".to_string())?
+            .fill(&mut j2c_key)
+            .map_err(|_| "HKDF fill failed (j2c)".to_string())?;
+
+        let (send_key, recv_key) = if is_creator {
+            (c2j_key, j2c_key)
+        } else {
+            (j2c_key, c2j_key)
+        };
 
         Ok(Self {
-            shared_secret: secret.to_vec(),
-            key_material,
+            send_key,
+            recv_key,
             seal_counter: AtomicU64::new(0),
+            max_recv_counter: AtomicU64::new(u64::MAX),
+            is_creator,
         })
+    }
+
+    /// Return direction-specific AAD bytes for authenticated encryption.
+    fn direction_aad(&self, sending: bool) -> &'static [u8] {
+        if (self.is_creator && sending) || (!self.is_creator && !sending) {
+            b"aurus-c2j"
+        } else {
+            b"aurus-j2c"
+        }
     }
 
     /// Encrypt a plaintext payload (e.g. a yrs update vector).
@@ -57,14 +97,14 @@ impl SessionEncryption {
         let counter = self.seal_counter.fetch_add(1, Ordering::SeqCst);
         let nonce_bytes = counter_to_nonce(counter);
 
-        let unbound_key = UnboundKey::new(&aead::AES_256_GCM, &self.key_material)
+        let unbound_key = UnboundKey::new(&aead::AES_256_GCM, &self.send_key)
             .map_err(|_| "Failed to create AES key".to_string())?;
 
         let mut sealing_key = SealingKey::new(unbound_key, SingleNonce::new(nonce_bytes));
 
         let mut in_out = plaintext.to_vec();
         sealing_key
-            .seal_in_place_append_tag(Aad::empty(), &mut in_out)
+            .seal_in_place_append_tag(Aad::from(self.direction_aad(true)), &mut in_out)
             .map_err(|_| "Encryption failed".to_string())?;
 
         Ok(EncryptedEnvelope {
@@ -75,60 +115,70 @@ impl SessionEncryption {
 
     /// Decrypt an encrypted envelope from a remote peer.
     pub fn decrypt(&self, envelope: &EncryptedEnvelope) -> Result<Vec<u8>, String> {
+        // Replay protection: reject messages with non-advancing counters
+        let max = self.max_recv_counter.load(Ordering::SeqCst);
+        if max != u64::MAX && envelope.counter <= max {
+            return Err("Replay detected: counter not advancing".to_string());
+        }
+
         let nonce_bytes = counter_to_nonce(envelope.counter);
 
-        let unbound_key = UnboundKey::new(&aead::AES_256_GCM, &self.key_material)
+        let unbound_key = UnboundKey::new(&aead::AES_256_GCM, &self.recv_key)
             .map_err(|_| "Failed to create AES key".to_string())?;
 
         let mut opening_key = OpeningKey::new(unbound_key, SingleNonce::new(nonce_bytes));
 
         let mut in_out = envelope.ciphertext.clone();
         let plaintext = opening_key
-            .open_in_place(Aad::empty(), &mut in_out)
+            .open_in_place(Aad::from(self.direction_aad(false)), &mut in_out)
             .map_err(|_| "Decryption failed — invalid key or tampered data".to_string())?;
+
+        // Update max counter only after successful decryption
+        self.max_recv_counter.store(envelope.counter, Ordering::SeqCst);
 
         Ok(plaintext.to_vec())
     }
 
     /// Rotate the encryption key using HKDF ratchet.
-    /// Derives a new key from the current key + a "rotate" context.
-    /// The old key material is zeroed.
+    /// Derives new keys from the current keys + a "rotate" context.
+    /// The old key material is zeroed automatically by Zeroizing.
+    /// The counter continues monotonically (not reset).
     pub fn rotate_key(&mut self) -> Result<(), String> {
         let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, b"aurus-sync-rotate");
-        let prk = salt.extract(&self.key_material);
 
-        let mut new_key = vec![0u8; 32];
-        prk.expand(&[b"next-key"], HkdfLen(32))
-            .map_err(|_| "HKDF expand failed during rotation".to_string())?
-            .fill(&mut new_key)
-            .map_err(|_| "HKDF fill failed during rotation".to_string())?;
+        // HKDF info must match between creator send and joiner recv (and vice versa)
+        // so both sides derive the same rotated key for each direction.
+        let (send_info, recv_info): (&[u8], &[u8]) = if self.is_creator {
+            (b"next-c2j-key", b"next-j2c-key")
+        } else {
+            (b"next-j2c-key", b"next-c2j-key")
+        };
 
-        // Zero old key material
-        for byte in self.key_material.iter_mut() {
-            *byte = 0;
-        }
+        // Rotate send key
+        let prk = salt.extract(&self.send_key);
+        let mut new_send = Zeroizing::new(vec![0u8; 32]);
+        prk.expand(&[send_info], HkdfLen(32))
+            .map_err(|_| "HKDF expand failed during rotation (send)".to_string())?
+            .fill(&mut new_send)
+            .map_err(|_| "HKDF fill failed during rotation (send)".to_string())?;
+        self.send_key = new_send;
 
-        self.key_material = new_key;
-        // Reset counter for new key epoch
-        self.seal_counter.store(0, Ordering::SeqCst);
+        // Rotate recv key
+        let prk_recv = salt.extract(&self.recv_key);
+        let mut new_recv = Zeroizing::new(vec![0u8; 32]);
+        prk_recv.expand(&[recv_info], HkdfLen(32))
+            .map_err(|_| "HKDF expand failed during rotation (recv)".to_string())?
+            .fill(&mut new_recv)
+            .map_err(|_| "HKDF fill failed during rotation (recv)".to_string())?;
+        self.recv_key = new_recv;
 
-        tracing::debug!("Encryption key rotated");
+        // DO NOT reset seal_counter — continue monotonically
+        tracing::debug!("Encryption keys rotated (both directions)");
         Ok(())
     }
 }
 
-impl Drop for SessionEncryption {
-    fn drop(&mut self) {
-        // Zero all sensitive material on drop.
-        for byte in self.shared_secret.iter_mut() {
-            *byte = 0;
-        }
-        for byte in self.key_material.iter_mut() {
-            *byte = 0;
-        }
-        tracing::debug!("SessionEncryption dropped — keys zeroed");
-    }
-}
+// No manual Drop needed — Zeroizing<Vec<u8>> handles zeroing on drop.
 
 // ---------------------------------------------------------------------------
 // Nonce helpers
@@ -182,22 +232,23 @@ mod tests {
     #[test]
     fn test_encrypt_decrypt_round_trip() {
         let secret = b"test-shared-secret-32-bytes-long";
-        let enc = SessionEncryption::from_shared_secret(secret).unwrap();
+        let creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
 
         let plaintext = b"Hello, sync world!";
-        let envelope = enc.encrypt(plaintext).unwrap();
+        let envelope = creator.encrypt(plaintext).unwrap();
 
         assert_ne!(envelope.ciphertext, plaintext);
         assert_eq!(envelope.counter, 0);
 
-        let decrypted = enc.decrypt(&envelope).unwrap();
+        let decrypted = joiner.decrypt(&envelope).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
     #[test]
     fn test_counter_increments() {
         let secret = b"test-shared-secret-32-bytes-long";
-        let enc = SessionEncryption::from_shared_secret(secret).unwrap();
+        let enc = SessionEncryption::from_shared_secret(secret, true).unwrap();
 
         let e1 = enc.encrypt(b"msg1").unwrap();
         let e2 = enc.encrypt(b"msg2").unwrap();
@@ -211,22 +262,23 @@ mod tests {
     #[test]
     fn test_tampered_ciphertext_fails() {
         let secret = b"test-shared-secret-32-bytes-long";
-        let enc = SessionEncryption::from_shared_secret(secret).unwrap();
+        let creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
 
-        let mut envelope = enc.encrypt(b"sensitive data").unwrap();
+        let mut envelope = creator.encrypt(b"sensitive data").unwrap();
         // Tamper with ciphertext
         if let Some(byte) = envelope.ciphertext.first_mut() {
             *byte ^= 0xFF;
         }
 
-        let result = enc.decrypt(&envelope);
+        let result = joiner.decrypt(&envelope);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_wrong_key_fails() {
-        let enc_a = SessionEncryption::from_shared_secret(b"secret-aaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap();
-        let enc_b = SessionEncryption::from_shared_secret(b"secret-bbbbbbbbbbbbbbbbbbbbbbbbbb").unwrap();
+        let enc_a = SessionEncryption::from_shared_secret(b"secret-aaaaaaaaaaaaaaaaaaaaaaaaaa", true).unwrap();
+        let enc_b = SessionEncryption::from_shared_secret(b"secret-bbbbbbbbbbbbbbbbbbbbbbbbbb", false).unwrap();
 
         let envelope = enc_a.encrypt(b"private message").unwrap();
         let result = enc_b.decrypt(&envelope);
@@ -234,34 +286,77 @@ mod tests {
     }
 
     #[test]
+    fn test_direction_specific_keys() {
+        // Both sides derive from same secret — but use different keys for send/recv
+        let secret = b"test-shared-secret-32-bytes-long";
+        let creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
+
+        // Creator → Joiner
+        let env1 = creator.encrypt(b"from creator").unwrap();
+        assert_eq!(joiner.decrypt(&env1).unwrap(), b"from creator");
+
+        // Joiner → Creator
+        let env2 = joiner.encrypt(b"from joiner").unwrap();
+        assert_eq!(creator.decrypt(&env2).unwrap(), b"from joiner");
+
+        // Creator cannot decrypt its own message (different key for recv)
+        let env3 = creator.encrypt(b"self test").unwrap();
+        assert!(creator.decrypt(&env3).is_err(), "Should not decrypt own message");
+    }
+
+    #[test]
+    fn test_replay_protection() {
+        let secret = b"test-shared-secret-32-bytes-long";
+        let creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
+
+        let env1 = creator.encrypt(b"msg1").unwrap();
+        let env2 = creator.encrypt(b"msg2").unwrap();
+
+        // First decrypt succeeds
+        joiner.decrypt(&env1).unwrap();
+        // Second decrypt succeeds (counter advances)
+        joiner.decrypt(&env2).unwrap();
+        // Replaying env1 should fail (counter went backwards)
+        assert!(joiner.decrypt(&env1).is_err(), "Replay should be rejected");
+        // Replaying env2 should also fail (counter not advancing)
+        assert!(joiner.decrypt(&env2).is_err(), "Replay should be rejected");
+    }
+
+    #[test]
     fn test_key_rotation() {
         let secret = b"test-shared-secret-32-bytes-long";
-        let mut enc = SessionEncryption::from_shared_secret(secret).unwrap();
+        let mut creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let mut joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
 
         // Encrypt before rotation
-        let before = enc.encrypt(b"before rotation").unwrap();
-        assert_eq!(before.counter, 0);
+        let before = creator.encrypt(b"before rotation").unwrap();
+        let before_counter = before.counter;
+        joiner.decrypt(&before).unwrap();
 
-        // Rotate
-        enc.rotate_key().unwrap();
+        // Rotate both sides
+        creator.rotate_key().unwrap();
+        joiner.rotate_key().unwrap();
 
-        // Counter should reset
-        let after = enc.encrypt(b"after rotation").unwrap();
-        assert_eq!(after.counter, 0);
+        // Counter should NOT reset — continues monotonically
+        let after = creator.encrypt(b"after rotation").unwrap();
+        assert!(after.counter > before_counter, "Counter should continue after rotation");
 
-        // Old ciphertext should NOT decrypt with new key
-        // (we can't easily test this because we'd need the old key)
+        // New message should decrypt with rotated keys
+        joiner.decrypt(&after).unwrap();
     }
 
     #[test]
     fn test_large_payload() {
         let secret = b"test-shared-secret-32-bytes-long";
-        let enc = SessionEncryption::from_shared_secret(secret).unwrap();
+        let creator = SessionEncryption::from_shared_secret(secret, true).unwrap();
+        let joiner = SessionEncryption::from_shared_secret(secret, false).unwrap();
 
         // Simulate a large yrs update (100KB)
         let large_payload = vec![0xAB; 100_000];
-        let envelope = enc.encrypt(&large_payload).unwrap();
-        let decrypted = enc.decrypt(&envelope).unwrap();
+        let envelope = creator.encrypt(&large_payload).unwrap();
+        let decrypted = joiner.decrypt(&envelope).unwrap();
         assert_eq!(decrypted, large_payload);
     }
 

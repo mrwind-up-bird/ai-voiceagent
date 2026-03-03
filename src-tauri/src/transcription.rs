@@ -75,9 +75,9 @@ pub type TranscriptionManager = Arc<Mutex<TranscriptionState>>;
 #[tauri::command]
 pub async fn start_deepgram_stream(
     app: AppHandle,
-    api_key: String,
     state: tauri::State<'_, TranscriptionManager>,
 ) -> Result<(), String> {
+    let api_key = crate::secrets::get_key_or_error("deepgram")?;
 
     // Atomically check and set streaming state to prevent race conditions
     {
@@ -232,9 +232,9 @@ pub async fn is_deepgram_streaming(
 #[tauri::command]
 pub async fn transcribe_with_assemblyai(
     app: AppHandle,
-    api_key: String,
     audio_data: Vec<i16>,
 ) -> Result<String, String> {
+    let api_key = crate::secrets::get_key_or_error("assembly_ai")?;
     let client = reqwest::Client::new();
 
     // Convert to bytes
@@ -285,8 +285,15 @@ pub async fn transcribe_with_assemblyai(
     let transcript_id = create_result.id.ok_or("No transcript ID returned")?;
 
     // Poll for completion
+    const MAX_ASSEMBLYAI_POLLS: u32 = 120; // 2 minutes at 1s intervals
+    let mut poll_count = 0u32;
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+
+        poll_count += 1;
+        if poll_count > MAX_ASSEMBLYAI_POLLS {
+            return Err("AssemblyAI transcription timed out after 2 minutes".to_string());
+        }
 
         let poll_response = client
             .get(format!("{}/transcript/{}", ASSEMBLYAI_URL, transcript_id))
@@ -365,10 +372,13 @@ async fn ensure_model_exists(model_path: &PathBuf) -> Result<(), String> {
         .await
         .map_err(|e| format!("Failed to read model bytes: {}", e))?;
 
+    // TODO: In production, verify SHA-256 hash of downloaded model to ensure integrity.
+    // Expected hash for ggml-base.en.bin should be pinned and checked here.
+
     std::fs::write(model_path, &bytes)
         .map_err(|e| format!("Failed to save model: {}", e))?;
 
-    tracing::info!("Whisper model downloaded successfully");
+    tracing::info!("Whisper model downloaded successfully ({} bytes)", bytes.len());
     Ok(())
 }
 

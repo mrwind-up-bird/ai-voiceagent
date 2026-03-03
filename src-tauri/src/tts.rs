@@ -2,6 +2,17 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter};
 
+/// Encode a PowerShell script as UTF-16LE Base64 for use with -EncodedCommand.
+/// This bypasses the shell parser entirely, eliminating all injection vectors.
+#[cfg(target_os = "windows")]
+fn encode_powershell_command(script: &str) -> String {
+    use base64::Engine;
+    let utf16le: Vec<u8> = script.encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    base64::engine::general_purpose::STANDARD.encode(&utf16le)
+}
+
 // Flag to track if speech is currently active
 static IS_SPEAKING: AtomicBool = AtomicBool::new(false);
 
@@ -59,12 +70,11 @@ fn stop_speech_internal() -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Stop SAPI speech
+        // Stop SAPI speech — use -EncodedCommand to avoid shell interpolation
+        let script = "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.SpeakAsyncCancelAll()";
+        let encoded = encode_powershell_command(script);
         let _ = Command::new("powershell")
-            .args([
-                "-Command",
-                "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.SpeakAsyncCancelAll()",
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
             .output();
     }
 
@@ -102,11 +112,11 @@ pub fn get_available_voices() -> Result<Vec<String>, String> {
 
     #[cfg(target_os = "windows")]
     {
+        // Use -EncodedCommand to avoid shell interpolation
+        let script = "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }";
+        let encoded = encode_powershell_command(script);
         let output = Command::new("powershell")
-            .args([
-                "-Command",
-                "Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer; $synth.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo.Name }",
-            ])
+            .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
             .output()
             .map_err(|e| format!("Failed to list voices: {}", e))?;
 
@@ -156,26 +166,43 @@ fn speak_native(text: &str, rate: Option<f32>, voice: Option<&str>) -> Result<()
 
 #[cfg(target_os = "windows")]
 fn speak_native(text: &str, rate: Option<f32>, voice: Option<&str>) -> Result<(), String> {
-    // Escape text for PowerShell
-    let escaped_text = text.replace("'", "''").replace("`", "``");
-
-    let mut script = String::from("Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;");
-
-    // Set voice if specified
-    if let Some(v) = voice {
-        script.push_str(&format!(" $synth.SelectVoice('{}');", v.replace("'", "''")));
+    // Validate inputs: reject control characters
+    if text.chars().any(|c| c.is_control() && c != '\n' && c != '\r' && c != '\t') {
+        return Err("Text contains invalid control characters".to_string());
     }
 
-    // Set rate (-10 to 10, default 0)
+    // Build PowerShell script using .NET [char] array construction to avoid any injection
+    let mut script = String::from("Add-Type -AssemblyName System.Speech; $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer;");
+
+    if let Some(v) = voice {
+        if v.chars().any(|c| c.is_control()) {
+            return Err("Voice name contains invalid characters".to_string());
+        }
+        // Use .NET [char] array construction — completely immune to PS injection
+        let char_array: String = v.chars()
+            .map(|c| format!("[char]{}", c as u32))
+            .collect::<Vec<_>>()
+            .join("+");
+        script.push_str(&format!(" $synth.SelectVoice({});", char_array));
+    }
+
     if let Some(r) = rate {
         let sapi_rate = ((r - 1.0) * 10.0).clamp(-10.0, 10.0) as i32;
         script.push_str(&format!(" $synth.Rate = {};", sapi_rate));
     }
 
-    script.push_str(&format!(" $synth.Speak('{}')", escaped_text));
+    // Use [char] array for text too — completely immune to injection
+    let char_array: String = text.chars()
+        .map(|c| format!("[char]{}", c as u32))
+        .collect::<Vec<_>>()
+        .join("+");
+    script.push_str(&format!(" $synth.Speak({})", char_array));
+
+    // Encode as UTF-16LE base64 for -EncodedCommand (bypasses shell parser entirely)
+    let encoded = encode_powershell_command(&script);
 
     let status = Command::new("powershell")
-        .args(["-Command", &script])
+        .args(["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
         .status()
         .map_err(|e| format!("Failed to run PowerShell: {}", e))?;
 

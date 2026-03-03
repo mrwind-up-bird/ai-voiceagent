@@ -100,7 +100,7 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
         .map(|c| c.with_sample_rate(cpal::SampleRate(TARGET_SAMPLE_RATE)).into())
         .unwrap_or_else(|| {
             // Fall back to default config if 16kHz isn't supported
-            let default = device.default_input_config().unwrap();
+            let default = device.default_input_config().expect("No default input config available for audio device");
             tracing::warn!(
                 "16kHz not supported, using device default: {}Hz",
                 default.sample_rate().0
@@ -252,6 +252,31 @@ pub fn save_recording(app: AppHandle, filepath: String) -> Result<(), String> {
 
     if samples.is_empty() {
         return Err("No audio recorded".to_string());
+    }
+
+    // Validate filepath: must be within home dir or app data, must end in .wav
+    let path = std::path::Path::new(&filepath);
+
+    // Enforce .wav extension
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("wav") => {},
+        _ => return Err("File must have .wav extension".to_string()),
+    }
+
+    // Resolve to canonical path (resolves ../ and symlinks)
+    let parent = path.parent()
+        .ok_or("Invalid file path")?;
+    let canonical_parent = parent.canonicalize()
+        .map_err(|e| format!("Invalid directory path: {}", e))?;
+
+    // Check path is within allowed directories
+    let home_dir = dirs::home_dir()
+        .ok_or("Could not determine home directory")?;
+    let data_dir = dirs::data_dir()
+        .ok_or("Could not determine app data directory")?;
+
+    if !canonical_parent.starts_with(&home_dir) && !canonical_parent.starts_with(&data_dir) {
+        return Err("File path must be within home or app data directory".to_string());
     }
 
     // Create WAV spec for 16kHz mono 16-bit PCM

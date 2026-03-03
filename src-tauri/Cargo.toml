@@ -45,6 +45,9 @@ rand = "0.8"
 # Pairing (SPAKE2 password-authenticated key exchange)
 spake2 = "0.4"
 
+# Compiler-safe key zeroing
+zeroize = "1"
+
 # Local network discovery
 mdns-sd = "0.17"
 

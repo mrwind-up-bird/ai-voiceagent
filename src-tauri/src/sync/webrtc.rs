@@ -82,13 +82,13 @@ impl PeerConnectionHandler for PcHandler {
     }
 
     fn on_candidate(&mut self, candidate: IceCandidate) {
-        let shared = self.shared.lock().unwrap();
+        let shared = self.shared.lock().expect("DcShared mutex poisoned");
         let _ = shared.ice_tx.send(candidate);
     }
 
     fn on_gathering_state_change(&mut self, state: GatheringState) {
         if state == GatheringState::Complete {
-            let mut shared = self.shared.lock().unwrap();
+            let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
             if let Some(tx) = shared.gathering_done_tx.take() {
                 let _ = tx.send(());
             }
@@ -96,7 +96,7 @@ impl PeerConnectionHandler for PcHandler {
     }
 
     fn on_connection_state_change(&mut self, state: ConnectionState) {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
         shared.connection_state = state;
         if let Some(w) = shared.waker.take() {
             w.wake();
@@ -111,14 +111,14 @@ struct DcHandler {
 
 impl DataChannelHandler for DcHandler {
     fn on_open(&mut self) {
-        let mut shared = self.shared.lock().unwrap();
+        let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
         if let Some(tx) = shared.open_tx.take() {
             let _ = tx.send(());
         }
     }
 
     fn on_message(&mut self, msg: &[u8]) {
-        let shared = self.shared.lock().unwrap();
+        let shared = self.shared.lock().expect("DcShared mutex poisoned");
         let _ = shared.msg_tx.send(msg.to_vec());
         if let Some(w) = shared.waker.as_ref() {
             w.wake_by_ref();

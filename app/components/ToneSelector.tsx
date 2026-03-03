@@ -79,12 +79,6 @@ export function ToneSelector() {
 
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const anthropicKey = await invoke<string | null>('get_api_key', { keyType: 'anthropic' });
-
-      if (!anthropicKey) {
-        setError('Anthropic API key required for Tone Shifter');
-        return;
-      }
 
       // Clear previous results before starting new request
       clearToneShiftStreaming();
@@ -92,7 +86,6 @@ export function ToneSelector() {
       setProcessing(true, 'Shifting tone...');
 
       await invoke('shift_tone_streaming', {
-        apiKey: anthropicKey,
         text: transcript,
         targetTone: tone,
         intensity: intensity,

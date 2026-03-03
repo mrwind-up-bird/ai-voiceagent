@@ -3,6 +3,7 @@ use tauri::{AppHandle, Emitter};
 
 // Q-Records API endpoint (placeholder - replace with actual endpoint)
 const QRECORDS_API_URL: &str = "https://api.qrecords.com/v1";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MusicMatchRequest {
@@ -73,9 +74,9 @@ struct QRecordsMoodAnalysis {
 #[tauri::command]
 pub async fn match_music(
     app: AppHandle,
-    api_key: String,
     request: MusicMatchRequest,
 ) -> Result<MusicMatchResult, String> {
+    let api_key = crate::secrets::get_key_or_error("qrecords")?;
     let client = reqwest::Client::new();
 
     let mut query_params = vec![("query", request.query.clone())];
@@ -100,7 +101,10 @@ pub async fn match_music(
         .query(&query_params)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Music match API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         // If Q-Records API fails, return mock data for development
@@ -159,9 +163,12 @@ pub async fn match_music(
 #[tauri::command]
 pub async fn analyze_mood_from_transcript(
     app: AppHandle,
-    openai_key: String,
     transcript: String,
 ) -> Result<MoodAnalysis, String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let openai_key = crate::secrets::get_key_or_error("openai")?;
     let client = reqwest::Client::new();
 
     let request_body = serde_json::json!({
@@ -193,11 +200,15 @@ Only return the JSON object, no other text."#
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Mood analysis API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Mood analysis API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let response_json: serde_json::Value = response

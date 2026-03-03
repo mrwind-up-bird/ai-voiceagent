@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const OPENAI_API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrainDumpResult {
@@ -166,9 +167,12 @@ IMPORTANT:
 #[tauri::command]
 pub async fn process_brain_dump(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<BrainDumpResult, String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     if transcript.trim().is_empty() {
         return Err("Transcript is empty. Please provide some content.".to_string());
     }
@@ -198,11 +202,15 @@ pub async fn process_brain_dump(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Brain dump API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Brain dump API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let response_json: serde_json::Value = response
@@ -225,9 +233,12 @@ pub async fn process_brain_dump(
 #[tauri::command]
 pub async fn process_brain_dump_streaming(
     app: AppHandle,
-    api_key: String,
     transcript: String,
 ) -> Result<(), String> {
+    if transcript.len() > MAX_TRANSCRIPT_LENGTH {
+        return Err(format!("Transcript too long ({} chars, max {})", transcript.len(), MAX_TRANSCRIPT_LENGTH));
+    }
+    let api_key = crate::secrets::get_key_or_error("openai")?;
     if transcript.trim().is_empty() {
         return Err("Transcript is empty. Please provide some content.".to_string());
     }
@@ -259,11 +270,15 @@ pub async fn process_brain_dump_streaming(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| {
+            tracing::error!("Brain dump streaming API request failed: {}", e);
+            "Service temporarily unavailable. Please try again.".to_string()
+        })?;
 
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API error: {}", error_text));
+        tracing::error!("Brain dump streaming API error: {}", error_text);
+        return Err("Service temporarily unavailable. Please try again.".to_string());
     }
 
     let mut stream = response.bytes_stream();
