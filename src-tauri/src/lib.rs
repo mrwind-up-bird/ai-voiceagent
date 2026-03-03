@@ -11,9 +11,19 @@ pub mod audio;
 pub mod tts;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Manager;
 use sync::SyncManager;
 use transcription::TranscriptionManager;
+
+/// Whether a global shortcut was successfully registered.
+/// If false, window hiding is disabled to prevent getting stuck.
+static SHORTCUT_REGISTERED: AtomicBool = AtomicBool::new(false);
+
+#[tauri::command]
+fn is_shortcut_registered() -> bool {
+    SHORTCUT_REGISTERED.load(Ordering::SeqCst)
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -46,18 +56,7 @@ pub fn run() {
             {
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
-                let shortcut = Shortcut::new(
-                    Some(Modifiers::SUPER | Modifiers::SHIFT),
-                    Code::KeyV,
-                );
-
-                let app_handle = app.handle().clone();
-
-                if let Err(e) = app.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-                    // Only handle key press, not key release
-                    if event.state != ShortcutState::Pressed {
-                        return;
-                    }
+                let toggle_window = |app_handle: &tauri::AppHandle| {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         if window.is_visible().unwrap_or(false) {
                             let _ = window.hide();
@@ -67,19 +66,58 @@ pub fn run() {
                             let _ = window.center();
                         }
                     }
-                }) {
-                    tracing::warn!("Failed to set shortcut handler: {}", e);
-                }
+                };
 
-                if let Err(e) = app.global_shortcut().register(shortcut) {
-                    tracing::warn!("Failed to register global shortcut Cmd+Shift+V: {}", e);
-                    // App will still work, just without the global shortcut
+                // Try primary shortcut: Cmd+Shift+V
+                let primary = Shortcut::new(
+                    Some(Modifiers::SUPER | Modifiers::SHIFT),
+                    Code::KeyV,
+                );
+
+                let app_handle = app.handle().clone();
+                let primary_registered = {
+                    let ah = app_handle.clone();
+                    let handler_ok = app.global_shortcut().on_shortcut(primary, move |_app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            toggle_window(&ah);
+                        }
+                    }).is_ok();
+                    handler_ok && app.global_shortcut().register(primary).is_ok()
+                };
+
+                if primary_registered {
+                    SHORTCUT_REGISTERED.store(true, Ordering::SeqCst);
+                    tracing::info!("Global shortcut registered: Cmd+Shift+V");
+                } else {
+                    tracing::warn!("Cmd+Shift+V unavailable, trying fallback Cmd+Shift+A");
+
+                    // Fallback shortcut: Cmd+Shift+A
+                    let fallback = Shortcut::new(
+                        Some(Modifiers::SUPER | Modifiers::SHIFT),
+                        Code::KeyA,
+                    );
+
+                    let ah = app_handle.clone();
+                    let fallback_ok = app.global_shortcut().on_shortcut(fallback, move |_app, _shortcut, event| {
+                        if event.state == ShortcutState::Pressed {
+                            toggle_window(&ah);
+                        }
+                    }).is_ok() && app.global_shortcut().register(fallback).is_ok();
+
+                    if fallback_ok {
+                        SHORTCUT_REGISTERED.store(true, Ordering::SeqCst);
+                        tracing::info!("Global shortcut registered: Cmd+Shift+A (fallback)");
+                    } else {
+                        tracing::error!("No global shortcut could be registered — window toggle unavailable");
+                    }
                 }
             }
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // Window management
+            is_shortcut_registered,
             // Secrets commands
             secrets::set_api_key,
             secrets::get_api_key,

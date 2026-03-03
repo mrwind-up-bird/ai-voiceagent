@@ -29,10 +29,13 @@ export default function Home() {
   useTauriEvents();
   useAudioForwarding();
 
-  // Desktop-only: hide window on Escape
+  // Desktop-only: hide window on Escape (only if global shortcut is registered to bring it back)
   useEscapeKey(async () => {
     if (!isDesktop) return;
     try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const hasShortcut = await invoke<boolean>('is_shortcut_registered');
+      if (!hasShortcut) return; // Don't hide — no shortcut to bring it back
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const window = getCurrentWindow();
       await window.hide();
