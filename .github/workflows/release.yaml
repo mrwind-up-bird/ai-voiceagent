@@ -32,20 +32,34 @@ jobs:
               name: `Aurus Voice Intelligence v${{ steps.get_version.outputs.VERSION }}`,
               body: `## What's New in v${{ steps.get_version.outputs.VERSION }}
 
+            ### Cross-Device Sync
+            - **Ephemeral P2P Sync** — CRDT-based real-time sync via WebRTC
+            - **Local Network Discovery** — mDNS + SPAKE2 pairing
+            - **Cross-Network Relay** — signaling server for remote sync
+            - **End-to-End Encryption** — ring crypto with forward secrecy
+            - **Sync UI** — pairing modal, status badge, auto-sync
+
+            ### Mobile Support
+            - iOS build support with platform-gated features
+            - Android project scaffolding
+            - Offline Whisper transcription fallback
+
+            ### Security
+            - Security audit remediation — 32 findings across 5 severity phases
+            - CSP hardening for Tauri IPC protocol
+            - Heartbeat, timeout, and forward secrecy for sync
+
             ### AI Agents
             - **Action Items** - Extract tasks and deadlines from voice notes
             - **Tone Shifter** - Rewrite text in 8 different tones
-            - **Translator** - Translate to 12+ languages
-            - **Dev-Log** - Generate commit messages, tickets, and updates
-            - **Brain Dump** - Categorize thoughts with Eisenhower Matrix
-            - **Mental Mirror** - Transform reflections into letters to yourself
+            - **Music Matcher** - Find music matching your mood
 
             ### Features
             - Real-time voice transcription via Deepgram Nova-2
             - Voice Activity Detection with visual feedback
-            - Native Text-to-Speech
             - Spotlight-style interface (Cmd+Shift+V)
             - Secure API key storage in OS keychain
+            - No external data storage — everything stays local
 
             ### Downloads
             Choose the installer for your platform below.
