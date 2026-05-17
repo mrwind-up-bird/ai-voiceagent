@@ -2,6 +2,7 @@
 
 import './globals.css';
 import { useEffect } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 export default function RootLayout({
   children,
@@ -31,7 +32,7 @@ export default function RootLayout({
         <title>Voice Intelligence Hub</title>
       </head>
       <body className="bg-transparent">
-        {children}
+        <ErrorBoundary>{children}</ErrorBoundary>
       </body>
     </html>
   );
