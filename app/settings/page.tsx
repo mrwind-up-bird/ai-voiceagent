@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { WindowControls } from '../components/WindowControls';
+import { PersonaSelector } from '../components/PersonaSelector';
 
 interface ApiKeyConfig {
   id: string;
@@ -282,6 +283,11 @@ export default function SettingsPage() {
         </div>
 
           {/* Info */}
+          {/* Sub-Project E — Persona selector (depends on persona_studio token above) */}
+          <div className="mt-6">
+            <PersonaSelector />
+          </div>
+
           <div className="mt-8 p-4 bg-voice-surface/50 border border-voice-border rounded-lg">
             <div className="flex items-start gap-3">
               <LockIcon className="w-5 h-5 text-voice-primary mt-0.5" />
