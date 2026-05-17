@@ -1,4 +1,16 @@
-use async_tungstenite::{tokio::connect_async, tungstenite::Message};
+use async_tungstenite::{
+    tokio::connect_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message},
+};
+
+/// Hard cap for inbound Deepgram WebSocket frames (H10). Transcripts
+/// are small JSON envelopes (~1 KB typical). 64 KiB is generous and
+/// turns hostile/MITM JSON-bombs into a Capacity error that the read
+/// loop handles cleanly — instead of panicking inside serde recursion
+/// or tungstenite buffering, which would leave `is_streaming=true`
+/// permanently stuck and block all future `start_deepgram_stream`
+/// calls until app restart.
+const DEEPGRAM_MAX_FRAME_BYTES: usize = 64 * 1024;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -106,15 +118,21 @@ pub async fn start_deepgram_stream(
         .body(())
         .map_err(|e| format!("Failed to build request: {}", e))?;
 
-    let (ws_stream, _) = match connect_async(request).await {
-        Ok(stream) => stream,
-        Err(e) => {
-            // Reset streaming state on connection failure
-            let mut state_guard = state.lock().await;
-            state_guard.is_streaming = false;
-            return Err(format!("Failed to connect to Deepgram: {}", e));
-        }
+    let ws_config = WebSocketConfig {
+        max_message_size: Some(DEEPGRAM_MAX_FRAME_BYTES),
+        max_frame_size: Some(DEEPGRAM_MAX_FRAME_BYTES),
+        ..Default::default()
     };
+    let (ws_stream, _) =
+        match connect_async_with_config(request, Some(ws_config)).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                // Reset streaming state on connection failure
+                let mut state_guard = state.lock().await;
+                state_guard.is_streaming = false;
+                return Err(format!("Failed to connect to Deepgram: {}", e));
+            }
+        };
 
     let (mut write, mut read) = ws_stream.split();
     let (tx, mut rx) = mpsc::channel::<Vec<i16>>(100);
@@ -466,4 +484,54 @@ pub async fn transcribe_local_whisper(
 
     tracing::info!("Local Whisper transcription complete: {} chars", result.len());
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// H10 — defense-in-depth: even without the new WS frame cap,
+    /// serde_json must return Err (not panic) on deeply-nested input,
+    /// so the read loop falls into the existing `tracing::warn!` branch
+    /// instead of poisoning is_streaming=true forever.
+    #[test]
+    fn deepgram_parser_returns_err_on_deeply_nested_json() {
+        let depth = 200_usize;
+        let mut s = String::with_capacity(depth * 2 + 4);
+        for _ in 0..depth {
+            s.push('[');
+        }
+        for _ in 0..depth {
+            s.push(']');
+        }
+        let result: Result<DeepgramResponse, _> = serde_json::from_str(&s);
+        assert!(result.is_err(), "deeply-nested JSON must be Err, not panic");
+    }
+
+    #[test]
+    fn deepgram_parser_handles_truncated_json() {
+        let truncated = r#"{"channel":{"alternatives":[{"transcript":"hello"#;
+        let result: Result<DeepgramResponse, _> = serde_json::from_str(truncated);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deepgram_parser_handles_wrong_shape() {
+        let wrong = r#"{"type":"Results","unexpected":"shape"}"#;
+        let result: Result<DeepgramResponse, _> = serde_json::from_str(wrong);
+        // Either ignores extras (Ok with default fields) or errors — either way no panic
+        let _ = result;
+    }
+
+    #[test]
+    fn deepgram_max_frame_bytes_is_reasonable() {
+        assert!(
+            DEEPGRAM_MAX_FRAME_BYTES >= 4 * 1024,
+            "must accept normal Deepgram envelopes"
+        );
+        assert!(
+            DEEPGRAM_MAX_FRAME_BYTES <= 256 * 1024,
+            "must reject MITM JSON bombs"
+        );
+    }
 }
