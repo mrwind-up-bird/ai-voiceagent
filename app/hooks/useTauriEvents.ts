@@ -302,6 +302,54 @@ export function useTauriEvents() {
         });
         listeners.push(unlistenDeepgramConnected);
 
+        // C7: bounded exponential-backoff reconnect when the WS drops
+        // mid-session (Wi-Fi handoff, Deepgram idle timeout, transient
+        // 5xx). Mirrors compute_deepgram_backoff_ms in Rust.
+        const computeBackoffMs = (attempt: number): number => {
+          if (attempt === 0) return 0;
+          const factor = 1 << Math.min(attempt - 1, 6);
+          return Math.min(250 * factor, 8_000);
+        };
+        const MAX_RECONNECT_ATTEMPTS = 5;
+        let reconnectInFlight = false;
+
+        const unlistenDeepgramDisconnected = await listen<{
+          reason: string;
+          recoverable: boolean;
+        }>('deepgram-disconnected', async (event) => {
+          const { reason, recoverable } = event.payload;
+          if (process.env.NODE_ENV === 'development') {
+            console.warn(`Deepgram disconnected: reason=${reason} recoverable=${recoverable}`);
+          }
+          if (!recoverable || reconnectInFlight) return;
+          // Only reconnect while the user is still actively recording.
+          if (useVoiceStore.getState().recordingState !== 'recording') return;
+
+          reconnectInFlight = true;
+          try {
+            const { invoke } = await import('@tauri-apps/api/core');
+            for (let attempt = 1; attempt <= MAX_RECONNECT_ATTEMPTS; attempt++) {
+              await new Promise((r) => setTimeout(r, computeBackoffMs(attempt)));
+              if (useVoiceStore.getState().recordingState !== 'recording') return;
+              try {
+                await invoke('start_deepgram_stream');
+                return; // success
+              } catch (e) {
+                if (process.env.NODE_ENV === 'development') {
+                  console.warn(`Deepgram reconnect attempt ${attempt} failed:`, e);
+                }
+              }
+            }
+            // Exhausted retries — surface failure.
+            useVoiceStore.getState().setError(
+              'Deepgram disconnected — please stop and try again.'
+            );
+          } finally {
+            reconnectInFlight = false;
+          }
+        });
+        listeners.push(unlistenDeepgramDisconnected);
+
         // Translation events
         const unlistenTranslationStarted = await listen('translation-started', () => {
           clearTranslationStreaming();

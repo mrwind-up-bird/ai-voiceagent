@@ -11,6 +11,31 @@ use async_tungstenite::{
 /// permanently stuck and block all future `start_deepgram_stream`
 /// calls until app restart.
 const DEEPGRAM_MAX_FRAME_BYTES: usize = 64 * 1024;
+
+/// Exponential-backoff schedule for the frontend Deepgram reconnect
+/// loop (C7). 250 ms → 500 → 1 s → 2 s → 4 s, capped at 8 s. After
+/// `MAX_DEEPGRAM_RECONNECT_ATTEMPTS` failures the frontend surfaces
+/// a hard "Disconnected — please stop and retry" UI state.
+pub const MAX_DEEPGRAM_RECONNECT_ATTEMPTS: u32 = 5;
+
+/// Compute reconnect delay for a given attempt number (1-indexed).
+/// Pure function so it can be unit-tested without spinning timers.
+pub fn compute_deepgram_backoff_ms(attempt: u32) -> u64 {
+    if attempt == 0 {
+        return 0;
+    }
+    let base = 250_u64;
+    let max = 8_000_u64;
+    // 2^(attempt-1) * base, saturating
+    let factor = 1_u64 << (attempt - 1).min(6);
+    base.saturating_mul(factor).min(max)
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct DeepgramDisconnectEvent {
+    reason: &'static str,
+    recoverable: bool,
+}
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -148,6 +173,12 @@ pub async fn start_deepgram_stream(
 
     // Spawn task to receive transcripts
     tokio::spawn(async move {
+        // C7: classify the disconnect reason so the frontend reconnect
+        // hook knows whether to retry (transient/network) or stop
+        // (graceful peer close, auth failure).
+        let mut reason: &'static str = "stream_ended";
+        let mut recoverable = true;
+
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
@@ -176,11 +207,23 @@ pub async fn start_deepgram_stream(
                 }
                 Ok(Message::Close(frame)) => {
                     tracing::debug!("Deepgram connection closed: {:?}", frame);
+                    reason = "close";
+                    // 1008 / 4xxx close codes typically mean auth or
+                    // policy rejection — those should NOT auto-retry.
+                    recoverable = match &frame {
+                        Some(f) => {
+                            let code: u16 = f.code.into();
+                            !(code == 1008 || (4000..5000).contains(&code))
+                        }
+                        None => true,
+                    };
                     break;
                 }
                 Ok(_) => {} // Ignore ping/pong/binary
                 Err(e) => {
                     tracing::error!("Deepgram WebSocket error: {}", e);
+                    reason = "error";
+                    recoverable = true;
                     break;
                 }
             }
@@ -188,6 +231,15 @@ pub async fn start_deepgram_stream(
 
         let mut state_guard = state_clone.lock().await;
         state_guard.is_streaming = false;
+        state_guard.deepgram_sender = None;
+        drop(state_guard);
+
+        // C7: emit disconnect event so the frontend hook can drive a
+        // bounded exponential-backoff reconnect (compute_deepgram_backoff_ms).
+        let _ = app_clone.emit(
+            "deepgram-disconnected",
+            DeepgramDisconnectEvent { reason, recoverable },
+        );
     });
 
     // Spawn task to send audio
@@ -528,5 +580,38 @@ mod tests {
         // Compile-time guard rails on the WS frame cap (H10).
         const _LOWER: () = assert!(DEEPGRAM_MAX_FRAME_BYTES >= 4 * 1024);
         const _UPPER: () = assert!(DEEPGRAM_MAX_FRAME_BYTES <= 256 * 1024);
+    }
+
+    // C7 — exponential backoff schedule
+
+    #[test]
+    fn backoff_starts_at_base_delay() {
+        assert_eq!(compute_deepgram_backoff_ms(1), 250);
+    }
+
+    #[test]
+    fn backoff_doubles_each_attempt() {
+        assert_eq!(compute_deepgram_backoff_ms(2), 500);
+        assert_eq!(compute_deepgram_backoff_ms(3), 1_000);
+        assert_eq!(compute_deepgram_backoff_ms(4), 2_000);
+        assert_eq!(compute_deepgram_backoff_ms(5), 4_000);
+    }
+
+    #[test]
+    fn backoff_caps_at_8_seconds() {
+        assert_eq!(compute_deepgram_backoff_ms(6), 8_000);
+        assert_eq!(compute_deepgram_backoff_ms(7), 8_000);
+        assert_eq!(compute_deepgram_backoff_ms(100), 8_000);
+    }
+
+    #[test]
+    fn backoff_zero_attempt_is_zero() {
+        assert_eq!(compute_deepgram_backoff_ms(0), 0);
+    }
+
+    #[test]
+    fn max_reconnect_attempts_is_bounded() {
+        const _: () = assert!(MAX_DEEPGRAM_RECONNECT_ATTEMPTS >= 3);
+        const _: () = assert!(MAX_DEEPGRAM_RECONNECT_ATTEMPTS <= 10);
     }
 }
