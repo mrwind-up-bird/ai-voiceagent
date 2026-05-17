@@ -54,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-03-18
+
+### Fixed
+- Prevent window hiding when global shortcut unavailable
+- CSP — add Tauri IPC protocol to connect-src
+- Security audit remediation — 32 findings across 5 severity phases
+
+### Added
+- iOS build support — gate datachannel behind desktop cfg
+
+---
+
 ## [Unreleased]
 
 ### Planned
@@ -63,5 +75,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Conversation history with search
 - Custom agent builder
 
+[1.2.0]: https://github.com/mrwind-up-bird/ai-voiceagent/releases/tag/v1.2.0
 [1.0.0]: https://github.com/mrwind-up-bird/ai-voiceagent/releases/tag/v1.0.0
-[Unreleased]: https://github.com/mrwind-up-bird/ai-voiceagent/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/mrwind-up-bird/ai-voiceagent/compare/v1.2.0...HEAD
