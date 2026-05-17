@@ -53,6 +53,14 @@ pub struct VadEvent {
 // Global flag for recording state - this is safe because it's just an atomic bool
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
+/// H4 — count consecutive audio-chunk drops. After 3 in a row we
+/// emit `transcription-degraded` so the frontend can surface a
+/// "Connection unstable — words may be missing" banner. Counter
+/// resets on the next successful forward.
+static CONSECUTIVE_AUDIO_DROPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+const AUDIO_DROP_WARN_THRESHOLD: usize = 3;
+
 /// RAII guard that ensures the recording flag is cleared even if the
 /// capture thread panics (C3, H3). Parameterised over the flag so tests
 /// can exercise it without touching global state.
@@ -296,10 +304,33 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
                             );
                         }
 
-                        // Send directly to Deepgram (bypassing frontend JSON serialization)
+                        // Send directly to Deepgram (bypassing frontend JSON serialization).
+                        // H4: track consecutive drops so a backpressured
+                        // channel / contended state lock can't silently
+                        // discard voice data forever.
+                        let mut dropped = false;
                         if let Ok(state) = transcription_state.try_lock() {
                             if state.is_streaming {
-                                let _ = state.send_audio_direct(resampled.clone());
+                                match state.send_audio_direct(resampled.clone()) {
+                                    Ok(()) => {
+                                        CONSECUTIVE_AUDIO_DROPS
+                                            .store(0, Ordering::Relaxed);
+                                    }
+                                    Err(_) => dropped = true,
+                                }
+                            }
+                        } else {
+                            dropped = true;
+                        }
+                        if dropped {
+                            let count = CONSECUTIVE_AUDIO_DROPS
+                                .fetch_add(1, Ordering::Relaxed)
+                                + 1;
+                            if count == AUDIO_DROP_WARN_THRESHOLD {
+                                let _ = app_clone.emit(
+                                    "transcription-degraded",
+                                    count,
+                                );
                             }
                         }
 
