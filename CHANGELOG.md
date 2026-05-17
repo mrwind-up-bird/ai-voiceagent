@@ -68,6 +68,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security & Stability — Crash-Stability Audit 2026-05-17
+
+5 parallel persona-lens agents (Nemesis, Aletheia, Ipcha, Athena, Metis) audited the full stack with iOS lookahead. Cael judge consolidated 57 raw findings into 43 canonical entries (7 Critical, 11 High, 18 Medium, 7 Low). 16 in-session fixes shipped; 2 iOS-only Criticals + 24 Medium/Low findings tracked as nyxCore Action Points for Sub-Project A.
+
+#### Critical fixes
+- **C3** Panic-safe audio capture with RAII guard — IS_RECORDING resets on panic-unwind, never stuck "already recording"
+- **C4** First-run API-key gate banner with focus-probe re-check
+- **C5** Classified HTTP errors (401/403, 402, 429, 408/504, 5xx) replace one-size-fits-all "Service temporarily unavailable"
+- **C6** Mic permission watchdog — emits `mic-permission-denied` after 3 s of no callbacks
+- **C7** Deepgram WS reconnect with exponential backoff (250 ms → 8 s, max 5 attempts)
+
+#### High fixes
+- **H1** WebRTC `DcShared` mutex poison-tolerant (`unwrap_or_else(|p| p.into_inner())`) — prevents SIGABRT across FFI
+- **H2** SPAKE2 listener loop with attempt budget — one hostile probe no longer burns pairing session
+- **H3** Audio capture supervisor — stream-error callback now breaks the loop and emits `recording-error`
+- **H4** Consecutive audio-drop counter → `transcription-degraded` event after 3 consecutive drops
+- **H5** Hotkey hide / Escape both stop recording — no more silent battery/quota drain
+- **H6** `useTauriEvents` + `useAudioForwarding` hoisted to root layout — surviving navigation
+- **H7** Rolling-window cap on `RECORDING_BUFFER` (30 min / 57 MiB) + 50k-char transcript cap
+- **H8** Agents reject null/missing API content instead of silent empty-string success
+- **H9** Top-level React `<ErrorBoundary>` — no more white-screen on render exceptions
+- **H10** Deepgram WS frame cap at 64 KiB — MITM JSON-bombs now Capacity-error cleanly
+- **H11** 20 MiB CRDT state budget per peer — crafted yrs updates can't grow unbounded
+
+#### Low fixes
+- **L1** `calculate_energy` filters non-finite floats and clamps to [-1, 1] before squaring
+
+#### Test infrastructure
+- Added `proptest` as dev-dependency
+- 8 property tests for `audio.rs` (resampler/VAD/mono never panic on adversarial input)
+- 4 negative tests for Deepgram frame parser (JSON-bomb, truncated, wrong-shape)
+- 33+ regression unit tests covering every Critical+High fix
+- All 97 Rust tests green; clippy clean with `-D warnings`
+
+#### Deferred to Sub-Project A (iOS build)
+- **C1** AVAudioSession interruption handling
+- **C2** iOS background-suspension lifecycle hooks
+
 ### Planned
 - Music Matcher agent (Q-Records API integration)
 - Real email delivery for Mental Mirror
