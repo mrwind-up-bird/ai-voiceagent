@@ -2,6 +2,14 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { useVoiceStore, ActionItem, Track, TranslationResult, DevLogResult, BrainDumpResult, BrainDumpTask, EisenhowerQuadrant, MentalMirrorResult } from '../store/voiceStore';
+import {
+  normalizeCategory,
+  CATEGORY_ORDER,
+  CATEGORY_LABEL,
+  CATEGORY_ACCENT,
+  PRIORITY_RANK,
+  type ActionItemCategory as ActionItemCategoryType,
+} from '../lib/actionItemCategory';
 
 const LANGUAGES = [
   { code: 'en', name: 'English' },
@@ -213,6 +221,90 @@ export function AgentResults() {
   );
 }
 
+function ActionItemRow({ item }: { item: ActionItem }) {
+  return (
+    <li className="flex gap-3">
+      <span
+        className={`
+          flex-shrink-0 w-2 h-2 mt-1.5 rounded-full
+          ${item.priority === 'high' ? 'bg-red-500' : ''}
+          ${item.priority === 'medium' ? 'bg-yellow-500' : ''}
+          ${item.priority === 'low' ? 'bg-green-500' : ''}
+        `}
+        title={`Priority: ${item.priority}`}
+      />
+      <div className="flex-1 min-w-0">
+        <p className="text-white text-sm">{item.task}</p>
+        <div className="flex flex-wrap gap-2 mt-1">
+          {item.assignee && (
+            <span className="text-xs text-gray-400">@{item.assignee}</span>
+          )}
+          {item.due_date && (
+            <span className="text-xs text-gray-400">Due: {item.due_date}</span>
+          )}
+        </div>
+        {item.rationale && (
+          <p
+            className="text-xs text-gray-500 mt-1 italic"
+            title="Why this priority / due date"
+          >
+            {item.rationale}
+          </p>
+        )}
+      </div>
+    </li>
+  );
+}
+
+function ActionItemGroups({ items }: { items: ActionItem[] }) {
+  type Bucket = { category: ActionItemCategoryType; items: ActionItem[] };
+  const buckets = new Map<ActionItemCategoryType, ActionItem[]>();
+  for (const item of items) {
+    const cat = normalizeCategory(item.category);
+    if (!buckets.has(cat)) buckets.set(cat, []);
+    buckets.get(cat)!.push(item);
+  }
+  // Sort within each bucket by priority high → medium → low.
+  Array.from(buckets.values()).forEach((list: ActionItem[]) => {
+    list.sort((a: ActionItem, b: ActionItem) => PRIORITY_RANK[a.priority] - PRIORITY_RANK[b.priority]);
+  });
+  const ordered: Bucket[] = CATEGORY_ORDER.filter((c) => buckets.has(c)).map((c) => ({
+    category: c,
+    items: buckets.get(c)!,
+  }));
+
+  // Single bucket → flat list, no header noise.
+  if (ordered.length <= 1) {
+    return (
+      <ul className="space-y-3">
+        {items.map((item, idx) => (
+          <ActionItemRow key={idx} item={item} />
+        ))}
+      </ul>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {ordered.map((bucket) => (
+        <div key={bucket.category}>
+          <div
+            className={`text-[10px] font-medium uppercase tracking-wider mb-2 pb-1 border-b ${CATEGORY_ACCENT[bucket.category]}`}
+          >
+            {CATEGORY_LABEL[bucket.category]}{' '}
+            <span className="text-gray-500 normal-case">({bucket.items.length})</span>
+          </div>
+          <ul className="space-y-3">
+            {bucket.items.map((item, idx) => (
+              <ActionItemRow key={idx} item={item} />
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ActionItemsDisplay({ items, isProcessing }: { items: ActionItem[]; isProcessing: boolean }) {
   const { copied, copy } = useCopyToClipboard();
   const { isSpeaking, speak, stop } = useTextToSpeech();
@@ -315,35 +407,11 @@ function ActionItemsDisplay({ items, isProcessing }: { items: ActionItem[]; isPr
             </div>
           </div>
         ) : (
-          <ul className="space-y-3">
-            {items.map((item, index) => (
-              <li key={index} className="flex gap-3">
-                <span
-                  className={`
-                    flex-shrink-0 w-2 h-2 mt-1.5 rounded-full
-                    ${item.priority === 'high' ? 'bg-red-500' : ''}
-                    ${item.priority === 'medium' ? 'bg-yellow-500' : ''}
-                    ${item.priority === 'low' ? 'bg-green-500' : ''}
-                  `}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-white text-sm">{item.task}</p>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {item.assignee && (
-                      <span className="text-xs text-gray-400">
-                        @{item.assignee}
-                      </span>
-                    )}
-                    {item.due_date && (
-                      <span className="text-xs text-gray-400">
-                        Due: {item.due_date}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+          // Sub-Project F — group items by category, sort within each
+          // category by priority (high → medium → low). When a session
+          // produced only a single category, fall back to a flat list
+          // to avoid useless headers.
+          <ActionItemGroups items={items} />
         )}
       </div>
     </div>

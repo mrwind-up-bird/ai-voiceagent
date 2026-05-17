@@ -1,11 +1,26 @@
 import { create } from 'zustand';
 
+export type ActionItemCategory =
+  | 'work'
+  | 'personal'
+  | 'errand'
+  | 'follow-up'
+  | 'decision'
+  | 'research'
+  | 'other';
+
 export interface ActionItem {
   task: string;
   assignee: string | null;
   due_date: string | null;
   priority: 'high' | 'medium' | 'low';
   context: string | null;
+  /** Sub-Project F — coarse bucket for visual grouping. Free-text
+   *  on the wire; the UI calls a normalisation helper. */
+  category?: string | null;
+  /** Sub-Project F — one-sentence rationale for the priority + due
+   *  date assignment, surfaced as a tooltip / collapsible. */
+  rationale?: string | null;
 }
 
 export interface ToneShiftResult {
