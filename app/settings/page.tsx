@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { WindowControls } from '../components/WindowControls';
 import { PersonaSelector } from '../components/PersonaSelector';
+import { NyxCoreBaseUrlInput } from '../components/NyxCoreBaseUrlInput';
 
 interface ApiKeyConfig {
   id: string;
@@ -283,8 +284,9 @@ export default function SettingsPage() {
         </div>
 
           {/* Info */}
-          {/* Sub-Project E — Persona selector (depends on persona_studio token above) */}
-          <div className="mt-6">
+          {/* Sub-Project E — nyxCore Base URL + Persona selector */}
+          <div className="mt-6 space-y-4">
+            <NyxCoreBaseUrlInput />
             <PersonaSelector />
           </div>
 

@@ -59,7 +59,16 @@ export function PersonaSelector() {
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
+      // Common gotcha: Aurus' dev server runs on :3000 too, so the
+      // default nyxCore base URL points at the wrong process and 404s.
+      // Surface a more actionable hint when that's the case.
+      if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
+        setError(
+          `${msg}\n\nNote: the nyxCore base URL above defaults to http://localhost:3000, but Aurus' own dev server runs there. If you're running both locally, set a different URL (e.g. http://localhost:3001) and run nyxcore-systems with PORT=3001 pnpm dev.`,
+        );
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
