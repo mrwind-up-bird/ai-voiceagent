@@ -57,6 +57,23 @@ pub struct TranscriptEvent {
     pub is_final: bool,
     pub confidence: f32,
     pub source: String,
+    /// Sub-Project C — primary speaker for this segment when Deepgram
+    /// diarization is enabled. None if diarization is off or the
+    /// segment had no recognised speaker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<u32>,
+    /// Per-word speakers when a single segment contains multiple voices
+    /// (e.g. interruption / overlap). Empty when not applicable.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub words: Vec<TranscriptWord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptWord {
+    pub word: String,
+    pub speaker: Option<u32>,
+    pub start: f32,
+    pub end: f32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -74,6 +91,34 @@ struct DeepgramChannel {
 struct DeepgramAlternative {
     transcript: String,
     confidence: f32,
+    #[serde(default)]
+    words: Vec<DeepgramWord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DeepgramWord {
+    word: String,
+    #[serde(default)]
+    speaker: Option<u32>,
+    #[serde(default)]
+    start: f32,
+    #[serde(default)]
+    end: f32,
+}
+
+/// Sub-Project C — choose the dominant speaker for an utterance by
+/// counting how many words each speaker contributed. Returns None if
+/// the words list is empty or no speaker was tagged. Pure helper for
+/// unit testing.
+fn dominant_speaker(words: &[DeepgramWord]) -> Option<u32> {
+    use std::collections::HashMap;
+    let mut counts: HashMap<u32, usize> = HashMap::new();
+    for w in words {
+        if let Some(spk) = w.speaker {
+            *counts.entry(spk).or_insert(0) += 1;
+        }
+    }
+    counts.into_iter().max_by_key(|(_, c)| *c).map(|(s, _)| s)
 }
 
 #[derive(Debug, Serialize)]
@@ -127,8 +172,11 @@ pub async fn start_deepgram_stream(
         state_guard.is_streaming = true;
     }
 
+    // Sub-Project C: enable speaker diarization (`diarize=true`) so
+    // multi-speaker recordings (meetings, interviews) get per-word
+    // speaker labels. Adds <1% latency per Deepgram docs.
     let url = format!(
-        "{}?model=nova-2&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&smart_format=true&endpointing=300",
+        "{}?model=nova-2&language=de&encoding=linear16&sample_rate=16000&channels=1&interim_results=true&punctuate=true&smart_format=true&endpointing=300&diarize=true",
         DEEPGRAM_WS_URL
     );
 
@@ -187,6 +235,18 @@ pub async fn start_deepgram_stream(
                             if let Some(channel) = response.channel {
                                 if let Some(alt) = channel.alternatives.first() {
                                     if !alt.transcript.is_empty() {
+                                        // Sub-Project C — derive segment speaker
+                                        let speaker = dominant_speaker(&alt.words);
+                                        let words: Vec<TranscriptWord> = alt
+                                            .words
+                                            .iter()
+                                            .map(|w| TranscriptWord {
+                                                word: w.word.clone(),
+                                                speaker: w.speaker,
+                                                start: w.start,
+                                                end: w.end,
+                                            })
+                                            .collect();
                                         let _ = app_clone.emit(
                                             "transcript",
                                             TranscriptEvent {
@@ -194,6 +254,8 @@ pub async fn start_deepgram_stream(
                                                 is_final: response.is_final.unwrap_or(false),
                                                 confidence: alt.confidence,
                                                 source: "deepgram".to_string(),
+                                                speaker,
+                                                words,
                                             },
                                         );
                                     }
@@ -387,6 +449,8 @@ pub async fn transcribe_with_assemblyai(
                         is_final: true,
                         confidence: 0.9,
                         source: "assemblyai".to_string(),
+                        speaker: None,
+                        words: Vec::new(),
                     },
                 );
                 return Ok(text);
@@ -531,6 +595,8 @@ pub async fn transcribe_local_whisper(
             is_final: true,
             confidence: 0.85, // Local model doesn't provide confidence
             source: "whisper-local".to_string(),
+            speaker: None,
+            words: Vec::new(),
         },
     );
 
@@ -613,5 +679,95 @@ mod tests {
     fn max_reconnect_attempts_is_bounded() {
         const _: () = assert!(MAX_DEEPGRAM_RECONNECT_ATTEMPTS >= 3);
         const _: () = assert!(MAX_DEEPGRAM_RECONNECT_ATTEMPTS <= 10);
+    }
+
+    // Sub-Project C — diarization helper tests
+
+    fn mk_word(text: &str, spk: Option<u32>) -> super::DeepgramWord {
+        super::DeepgramWord {
+            word: text.to_string(),
+            speaker: spk,
+            start: 0.0,
+            end: 0.0,
+        }
+    }
+
+    #[test]
+    fn dominant_speaker_empty_returns_none() {
+        assert_eq!(super::dominant_speaker(&[]), None);
+    }
+
+    #[test]
+    fn dominant_speaker_all_untagged_returns_none() {
+        let words = vec![mk_word("hello", None), mk_word("world", None)];
+        assert_eq!(super::dominant_speaker(&words), None);
+    }
+
+    #[test]
+    fn dominant_speaker_single_voice_returns_that_speaker() {
+        let words = vec![
+            mk_word("hello", Some(0)),
+            mk_word("world", Some(0)),
+            mk_word("there", Some(0)),
+        ];
+        assert_eq!(super::dominant_speaker(&words), Some(0));
+    }
+
+    #[test]
+    fn dominant_speaker_majority_wins() {
+        let words = vec![
+            mk_word("hello", Some(0)),
+            mk_word("world", Some(0)),
+            mk_word("yes", Some(1)),
+            mk_word("there", Some(0)),
+        ];
+        assert_eq!(super::dominant_speaker(&words), Some(0));
+    }
+
+    #[test]
+    fn dominant_speaker_ignores_untagged_words() {
+        let words = vec![
+            mk_word("um", None),
+            mk_word("hello", Some(2)),
+            mk_word("there", Some(2)),
+        ];
+        assert_eq!(super::dominant_speaker(&words), Some(2));
+    }
+
+    #[test]
+    fn deepgram_response_parses_diarized_payload() {
+        let json = r#"{
+            "channel": {
+                "alternatives": [{
+                    "transcript": "hello world",
+                    "confidence": 0.95,
+                    "words": [
+                        {"word":"hello","speaker":0,"start":0.0,"end":0.5},
+                        {"word":"world","speaker":1,"start":0.6,"end":1.0}
+                    ]
+                }]
+            },
+            "is_final": true
+        }"#;
+        let parsed: super::DeepgramResponse = serde_json::from_str(json).expect("parse");
+        let alt = &parsed.channel.unwrap().alternatives[0];
+        assert_eq!(alt.transcript, "hello world");
+        assert_eq!(alt.words.len(), 2);
+        assert_eq!(alt.words[0].speaker, Some(0));
+        assert_eq!(alt.words[1].speaker, Some(1));
+    }
+
+    #[test]
+    fn deepgram_response_parses_non_diarized_payload_backward_compat() {
+        // Pre-diarize-flag payload: words key missing entirely
+        let json = r#"{
+            "channel": {
+                "alternatives": [{"transcript":"hi","confidence":0.9}]
+            },
+            "is_final": true
+        }"#;
+        let parsed: super::DeepgramResponse = serde_json::from_str(json).expect("parse");
+        let alt = &parsed.channel.unwrap().alternatives[0];
+        assert!(alt.words.is_empty());
     }
 }

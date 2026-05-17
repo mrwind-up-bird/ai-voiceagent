@@ -117,9 +117,13 @@ interface VoiceState {
   // Transcript
   transcript: string;
   interimTranscript: string;
+  /** Sub-Project C — per-segment speaker label history. Each entry is
+   *  the dominant speaker for one final segment, aligned with newline-
+   *  delimited segments in `transcript`. */
+  transcriptSegments: { text: string; speaker: number | null }[];
   setTranscript: (text: string) => void;
   setInterimTranscript: (text: string) => void;
-  appendTranscript: (text: string, isFinal: boolean) => void;
+  appendTranscript: (text: string, isFinal: boolean, speaker?: number | null) => void;
   clearTranscript: () => void;
 
   // VAD
@@ -217,6 +221,7 @@ const initialState = {
   recordingDuration: 0,
   transcript: '',
   interimTranscript: '',
+  transcriptSegments: [] as { text: string; speaker: number | null }[],
   isSpeechDetected: false,
   audioEnergy: 0,
   activeAgent: null as AgentType,
@@ -261,7 +266,7 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
 
   setInterimTranscript: (text) => set({ interimTranscript: text }),
 
-  appendTranscript: (text, isFinal) => {
+  appendTranscript: (text, isFinal, speaker = null) => {
     if (isFinal) {
       set((state) => {
         // H7: cap the live transcript at ~50k characters (≈30-50 min
@@ -277,9 +282,18 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
           combined.length > MAX_TRANSCRIPT_CHARS
             ? combined.slice(combined.length - TRIM_TO_CHARS)
             : combined;
+        // Sub-Project C — record this segment with its dominant speaker.
+        // Cap segment history at 500 entries to match the transcript cap.
+        const MAX_SEGMENTS = 500;
+        const newSegments = [...state.transcriptSegments, { text, speaker }];
+        const segments =
+          newSegments.length > MAX_SEGMENTS
+            ? newSegments.slice(newSegments.length - MAX_SEGMENTS)
+            : newSegments;
         return {
           transcript: next,
           interimTranscript: '',
+          transcriptSegments: segments,
         };
       });
     } else {
@@ -287,7 +301,8 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
     }
   },
 
-  clearTranscript: () => set({ transcript: '', interimTranscript: '' }),
+  clearTranscript: () =>
+    set({ transcript: '', interimTranscript: '', transcriptSegments: [] }),
 
   setVadState: (isSpeech, energy) =>
     set({ isSpeechDetected: isSpeech, audioEnergy: energy }),

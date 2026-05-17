@@ -7,11 +7,22 @@ interface TauriEvent<T> {
   payload: T;
 }
 
+interface TranscriptWord {
+  word: string;
+  speaker?: number;
+  start: number;
+  end: number;
+}
+
 interface TranscriptPayload {
   text: string;
   is_final: boolean;
   confidence: number;
   source: string;
+  /** Sub-Project C — dominant speaker for the segment, when diarization is on. */
+  speaker?: number;
+  /** Per-word speakers when a segment contains multiple voices. */
+  words?: TranscriptWord[];
 }
 
 interface VadPayload {
@@ -202,10 +213,15 @@ export function useTauriEvents() {
         listeners.push(unlistenRecordingSaved);
 
         // Transcript events
+        // Sub-Project C — pass speaker through to the store
         const unlistenTranscript = await listen<TranscriptPayload>(
           'transcript',
           (event: TauriEvent<TranscriptPayload>) => {
-            appendTranscript(event.payload.text, event.payload.is_final);
+            appendTranscript(
+              event.payload.text,
+              event.payload.is_final,
+              event.payload.speaker ?? null,
+            );
           }
         );
         listeners.push(unlistenTranscript);
