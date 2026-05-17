@@ -263,10 +263,25 @@ export const useVoiceStore = create<VoiceState>((set, get) => ({
 
   appendTranscript: (text, isFinal) => {
     if (isFinal) {
-      set((state) => ({
-        transcript: state.transcript + (state.transcript ? ' ' : '') + text,
-        interimTranscript: '',
-      }));
+      set((state) => {
+        // H7: cap the live transcript at ~50k characters (≈30-50 min
+        // of dense speech) so long sessions don't blow up React
+        // re-render cost via O(n²) string reallocation, and don't
+        // pressure the iOS WebView heap. When we hit the cap, drop
+        // the oldest ~25% to leave headroom for new content.
+        const MAX_TRANSCRIPT_CHARS = 50_000;
+        const TRIM_TO_CHARS = 37_500;
+        const combined =
+          state.transcript + (state.transcript ? ' ' : '') + text;
+        const next =
+          combined.length > MAX_TRANSCRIPT_CHARS
+            ? combined.slice(combined.length - TRIM_TO_CHARS)
+            : combined;
+        return {
+          transcript: next,
+          interimTranscript: '',
+        };
+      });
     } else {
       set({ interimTranscript: text });
     }
