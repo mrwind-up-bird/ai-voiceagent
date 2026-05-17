@@ -140,48 +140,94 @@ pub async fn start_creator_transport(
     tokio::spawn(async move {
         tracing::info!("Sync transport: listening on port {}", port);
 
-        match listener.accept().await {
-            Ok((stream, peer_addr)) => {
-                tracing::info!("Sync transport: peer connected from {}", peer_addr);
-                if let Err(e) = handle_creator_connection(
-                    app,
-                    stream,
-                    pairing_code,
-                    doc,
-                    update_rx,
-                    sync_state,
-                )
-                .await
-                {
-                    tracing::error!("Sync transport error: {}", e);
+        // H2: loop on accept() until a peer completes SPAKE2 (or we
+        // exhaust attempts). Previously a single `listener.accept()`
+        // followed by a single SPAKE2 exchange meant any hostile/buggy
+        // probe burned the entire pairing session.
+        const MAX_PAIRING_ATTEMPTS: usize = 16;
+        let mut attempts = 0_usize;
+        let (ws_write, ws_read, encryption) = loop {
+            attempts += 1;
+            if attempts > MAX_PAIRING_ATTEMPTS {
+                tracing::error!(
+                    "Sync transport: exhausted {} pairing attempts, giving up",
+                    MAX_PAIRING_ATTEMPTS
+                );
+                return;
+            }
+
+            let (stream, peer_addr) = match listener.accept().await {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::warn!(
+                        "Sync transport: accept failed (attempt {}): {}",
+                        attempts,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            tracing::info!(
+                "Sync transport: peer connected from {} (attempt {})",
+                peer_addr,
+                attempts
+            );
+
+            match creator_handshake(stream, &pairing_code).await {
+                Ok(parts) => break parts,
+                Err(e) => {
+                    tracing::warn!(
+                        "Sync transport: handshake from {} failed (attempt {}): {} — \
+                         waiting for next peer",
+                        peer_addr,
+                        attempts,
+                        e
+                    );
+                    continue;
                 }
             }
-            Err(e) => {
-                tracing::error!("Sync transport: accept failed: {}", e);
-            }
+        };
+
+        if let Err(e) = run_creator_session(
+            app,
+            ws_write,
+            ws_read,
+            doc,
+            update_rx,
+            sync_state,
+            encryption,
+        )
+        .await
+        {
+            tracing::error!("Sync transport session error: {}", e);
         }
     });
 
     Ok((port, handle))
 }
 
-/// Handle the WebSocket connection as the creator (server side).
-async fn handle_creator_connection(
-    app: AppHandle,
+type WsWriter = futures_util::stream::SplitSink<
+    async_tungstenite::WebSocketStream<async_tungstenite::tokio::TokioAdapter<tokio::net::TcpStream>>,
+    Message,
+>;
+type WsReader = futures_util::stream::SplitStream<
+    async_tungstenite::WebSocketStream<async_tungstenite::tokio::TokioAdapter<tokio::net::TcpStream>>,
+>;
+
+/// Handshake-only phase: WebSocket upgrade + SPAKE2 exchange. Returns
+/// the split sink/stream and the derived session encryption on success.
+/// Errors here mean "retry with the next peer" (H2).
+async fn creator_handshake(
     stream: tokio::net::TcpStream,
-    pairing_code: String,
-    doc: Arc<Mutex<SyncDocument>>,
-    update_rx: mpsc::Receiver<Vec<u8>>,
-    sync_state: super::SyncManager,
-) -> Result<(), String> {
+    pairing_code: &str,
+) -> Result<(WsWriter, WsReader, SessionEncryption), String> {
     let ws_stream = accept_async(stream)
         .await
         .map_err(|e| format!("WebSocket accept failed: {}", e))?;
-
     let (mut ws_write, mut ws_read) = ws_stream.split();
 
-    // --- SPAKE2 Key Exchange ---
-    let creator = PairingCreator::start(&pairing_code);
+    let creator = PairingCreator::start(pairing_code);
     let spake_msg = SyncMessage::Spake2 {
         payload: creator.outbound_msg.clone(),
     };
@@ -200,6 +246,21 @@ async fn handle_creator_connection(
     let encryption = creator.finish(&joiner_payload)?;
     tracing::info!("Sync transport: SPAKE2 key exchange complete (creator)");
 
+    Ok((ws_write, ws_read, encryption))
+}
+
+/// Post-handshake creator session: device info exchange, initial state,
+/// and the main run loop. SPAKE2 is already complete by the time this
+/// is called (H2 — see creator_handshake).
+async fn run_creator_session(
+    app: AppHandle,
+    mut ws_write: WsWriter,
+    mut ws_read: WsReader,
+    doc: Arc<Mutex<SyncDocument>>,
+    update_rx: mpsc::Receiver<Vec<u8>>,
+    sync_state: super::SyncManager,
+    encryption: SessionEncryption,
+) -> Result<(), String> {
     // --- Exchange device info ---
     let (device_id, device_name) = {
         let s = sync_state.lock().await;

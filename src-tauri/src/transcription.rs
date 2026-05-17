@@ -525,13 +525,8 @@ mod tests {
 
     #[test]
     fn deepgram_max_frame_bytes_is_reasonable() {
-        assert!(
-            DEEPGRAM_MAX_FRAME_BYTES >= 4 * 1024,
-            "must accept normal Deepgram envelopes"
-        );
-        assert!(
-            DEEPGRAM_MAX_FRAME_BYTES <= 256 * 1024,
-            "must reject MITM JSON bombs"
-        );
+        // Compile-time guard rails on the WS frame cap (H10).
+        const _LOWER: () = assert!(DEEPGRAM_MAX_FRAME_BYTES >= 4 * 1024);
+        const _UPPER: () = assert!(DEEPGRAM_MAX_FRAME_BYTES <= 256 * 1024);
     }
 }
