@@ -167,9 +167,10 @@ pub async fn shift_tone(
         })?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Tone shift API error: {}", error_text);
-        return Err("Service temporarily unavailable. Please try again.".to_string());
+        return Err(super::classify_api_error(status));
     }
 
     let response_json: serde_json::Value = response
@@ -249,9 +250,10 @@ pub async fn shift_tone_streaming(
         })?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Tone shift streaming API error: {}", error_text);
-        return Err("Service temporarily unavailable. Please try again.".to_string());
+        return Err(super::classify_api_error(status));
     }
 
     let _ = app.emit("tone-shift-started", ());

@@ -104,9 +104,10 @@ pub async fn extract_action_items(
         })?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Action items API error: {}", error_text);
-        return Err("Service temporarily unavailable. Please try again.".to_string());
+        return Err(super::classify_api_error(status));
     }
 
     let openai_response: OpenAiResponse = response

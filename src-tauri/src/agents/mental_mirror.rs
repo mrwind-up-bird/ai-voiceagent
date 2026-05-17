@@ -119,9 +119,10 @@ pub async fn generate_mental_mirror(
         })?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Mental mirror API error: {}", error_text);
-        return Err("Service temporarily unavailable. Please try again.".to_string());
+        return Err(super::classify_api_error(status));
     }
 
     let response_json: serde_json::Value = response
@@ -187,9 +188,10 @@ pub async fn generate_mental_mirror_streaming(
         })?;
 
     if !response.status().is_success() {
+        let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Mental mirror streaming API error: {}", error_text);
-        return Err("Service temporarily unavailable. Please try again.".to_string());
+        return Err(super::classify_api_error(status));
     }
 
     let mut stream = response.bytes_stream();
