@@ -88,6 +88,16 @@ impl SyncDocument {
         txn.state_vector().encode_v1()
     }
 
+    /// Approximate the in-memory state size by encoding the full update
+    /// from epoch (H11 — defence against a paired peer flooding crafted
+    /// yrs updates that pass MAX_SYNC_MESSAGE_SIZE individually but
+    /// compound into unbounded CRDT growth).
+    pub fn approximate_state_bytes(&self) -> usize {
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&yrs::StateVector::default())
+            .len()
+    }
+
     /// Apply a binary update received from a remote peer.
     pub fn apply_update(&self, update: &[u8]) -> Result<(), String> {
         let update =
@@ -348,5 +358,43 @@ mod tests {
         assert_eq!(snap.transcript, "Test transcript");
         assert_eq!(snap.recording_state, "recording");
         assert_eq!(snap.active_agent, Some("tone-shifter".to_string()));
+    }
+
+    /// H11 — approximate_state_bytes must grow monotonically as the
+    /// doc accumulates content, so transport.rs can enforce a budget.
+    #[test]
+    fn approximate_state_bytes_grows_with_content() {
+        let doc = SyncDocument::new();
+        let initial = doc.approximate_state_bytes();
+
+        doc.set_transcript("short");
+        let after_short = doc.approximate_state_bytes();
+        assert!(
+            after_short > initial,
+            "state must grow after first write: {} -> {}",
+            initial,
+            after_short
+        );
+
+        let long: String = "lorem ipsum dolor sit amet ".repeat(100);
+        doc.set_transcript(&long);
+        let after_long = doc.approximate_state_bytes();
+        assert!(
+            after_long > after_short,
+            "state must grow after long write: {} -> {}",
+            after_short,
+            after_long
+        );
+    }
+
+    #[test]
+    fn approximate_state_bytes_is_bounded_for_empty_doc() {
+        let doc = SyncDocument::new();
+        let bytes = doc.approximate_state_bytes();
+        assert!(
+            bytes < 1024,
+            "empty doc state should be under 1 KiB, got {}",
+            bytes
+        );
     }
 }

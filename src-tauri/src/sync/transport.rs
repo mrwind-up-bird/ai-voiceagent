@@ -42,6 +42,13 @@ const KEY_ROTATION_INTERVAL: Duration = Duration::from_secs(30 * 60);
 /// Maximum sync message size (5MB) — reject oversized messages.
 const MAX_SYNC_MESSAGE_SIZE: usize = 5 * 1024 * 1024;
 
+/// H11 — abort a peer session whose cumulative yrs document state
+/// exceeds 20 MiB. A malicious paired peer (the user shared their
+/// pairing code in a screenshare) could otherwise stream many
+/// individually-allowed encrypted updates that compound into unbounded
+/// CRDT memory growth.
+const MAX_DOC_STATE_BYTES: usize = 20 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Wire protocol messages
 // ---------------------------------------------------------------------------
@@ -521,6 +528,16 @@ where
                                                     if let Err(e) = doc_guard.apply_update(&decrypted_bytes) {
                                                         tracing::warn!("Failed to apply sync update: {}", e);
                                                     } else {
+                                                        // H11: enforce doc-size budget
+                                                        let state_bytes = doc_guard.approximate_state_bytes();
+                                                        if state_bytes > MAX_DOC_STATE_BYTES {
+                                                            tracing::error!(
+                                                                "Sync doc state {} bytes exceeds budget {} — disconnecting peer",
+                                                                state_bytes,
+                                                                MAX_DOC_STATE_BYTES
+                                                            );
+                                                            break;
+                                                        }
                                                         let snapshot = doc_guard.snapshot();
                                                         app.emit("sync-state-updated", &snapshot).ok();
                                                     }
@@ -532,6 +549,16 @@ where
                                             if let Err(e) = doc_guard.apply_update(&decrypted_bytes) {
                                                 tracing::warn!("Failed to apply sync update: {}", e);
                                             } else {
+                                                // H11: enforce doc-size budget
+                                                let state_bytes = doc_guard.approximate_state_bytes();
+                                                if state_bytes > MAX_DOC_STATE_BYTES {
+                                                    tracing::error!(
+                                                        "Sync doc state {} bytes exceeds budget {} — disconnecting peer",
+                                                        state_bytes,
+                                                        MAX_DOC_STATE_BYTES
+                                                    );
+                                                    break;
+                                                }
                                                 let snapshot = doc_guard.snapshot();
                                                 app.emit("sync-state-updated", &snapshot).ok();
                                             }
