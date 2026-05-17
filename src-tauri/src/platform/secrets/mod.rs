@@ -101,8 +101,21 @@ compile_error!("Unsupported platform for secure storage");
 /// Service name used for keychain entries
 pub const SERVICE_NAME: &str = "com.aurusvoiceintelligence";
 
-/// Valid API key types
-pub const VALID_KEY_TYPES: &[&str] = &["deepgram", "assembly_ai", "openai", "anthropic", "qrecords"];
+/// Valid API key types.
+///
+/// Sub-Project D — `nyxcore_axiom` is the Bearer token for the nyxCore
+/// Axiom RAG endpoint (POST /api/v1/rag/search), and `persona_studio`
+/// is the `nyx_pa_…` Bearer token for the Persona Studio chat endpoint
+/// (POST /api/v1/persona/chat). Both are user-supplied at first run.
+pub const VALID_KEY_TYPES: &[&str] = &[
+    "deepgram",
+    "assembly_ai",
+    "openai",
+    "anthropic",
+    "qrecords",
+    "nyxcore_axiom",
+    "persona_studio",
+];
 
 /// Check if a key type is valid
 pub fn is_valid_key_type(key_type: &str) -> bool {

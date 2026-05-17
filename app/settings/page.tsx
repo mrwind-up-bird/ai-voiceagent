@@ -42,6 +42,20 @@ const API_KEYS: ApiKeyConfig[] = [
     description: 'Music matching service',
     placeholder: 'Enter your Q-Records API key',
   },
+  {
+    id: 'persona_studio',
+    name: 'Persona Studio',
+    description:
+      'nyxCore Persona Studio — persona-tuned outputs for todos, letters, and brain-dumps',
+    placeholder: 'nyx_pa_...',
+  },
+  {
+    id: 'nyxcore_axiom',
+    name: 'nyxCore Axiom',
+    description:
+      'nyxCore Axiom knowledge base — context-aware suggestions from your knowledge graph',
+    placeholder: 'Enter your Axiom Bearer token',
+  },
 ];
 
 export default function SettingsPage() {
