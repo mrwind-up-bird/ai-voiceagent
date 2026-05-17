@@ -9,6 +9,12 @@ use crate::transcription::TranscriptionManager;
 const TARGET_SAMPLE_RATE: u32 = 16000;
 const VAD_THRESHOLD: f32 = 0.02;
 
+/// Cap RECORDING_BUFFER at ~30 minutes of 16 kHz mono i16 (H7).
+/// 30 min × 60 s × 16_000 samples/s = 28_800_000 samples = ~57 MiB.
+/// Beyond this we drop the oldest samples in a rolling window so the
+/// app never OOMs on a long session (or jetsam-kills on iOS).
+const MAX_RECORDING_SAMPLES: usize = 30 * 60 * TARGET_SAMPLE_RATE as usize;
+
 /// Global buffer to store all recorded audio samples for saving
 static RECORDING_BUFFER: Lazy<Mutex<Vec<i16>>> = Lazy::new(|| Mutex::new(Vec::new()));
 
@@ -77,6 +83,31 @@ fn panic_to_msg(payload: &Box<dyn std::any::Any + Send>) -> String {
         return s.clone();
     }
     "audio capture thread panicked (unknown payload)".to_string()
+}
+
+/// Append `incoming` to `buffer`, enforcing a rolling-window cap of
+/// `max_total` samples (H7). When the cap would be exceeded, the
+/// oldest samples are dropped first. Returns the number of samples
+/// dropped, useful for telemetry / tests.
+fn append_with_cap(buffer: &mut Vec<i16>, incoming: &[i16], max_total: usize) -> usize {
+    let combined = buffer.len() + incoming.len();
+    if combined <= max_total {
+        buffer.extend_from_slice(incoming);
+        return 0;
+    }
+    let overflow = combined - max_total;
+    if overflow >= buffer.len() {
+        // Even after dropping the entire existing buffer, incoming is
+        // still oversized — keep only the tail that fits.
+        buffer.clear();
+        let keep_from = incoming.len().saturating_sub(max_total);
+        buffer.extend_from_slice(&incoming[keep_from..]);
+        overflow
+    } else {
+        buffer.drain(..overflow);
+        buffer.extend_from_slice(incoming);
+        overflow
+    }
 }
 
 /// Supervise the audio capture loop. Returns Err if the CPAL error
@@ -254,9 +285,15 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
                             chunk
                         };
 
-                        // Store in global recording buffer for later saving
+                        // Store in global recording buffer for later saving.
+                        // H7: cap at MAX_RECORDING_SAMPLES (rolling window)
+                        // so long sessions don't OOM the process.
                         if let Ok(mut rec_buffer) = RECORDING_BUFFER.lock() {
-                            rec_buffer.extend(resampled.iter());
+                            let _dropped = append_with_cap(
+                                &mut rec_buffer,
+                                &resampled,
+                                MAX_RECORDING_SAMPLES,
+                            );
                         }
 
                         // Send directly to Deepgram (bypassing frontend JSON serialization)
@@ -524,6 +561,51 @@ mod tests {
             "error message should mention stream error: {}",
             msg
         );
+    }
+
+    // H7 — append_with_cap rolling-window tests
+
+    #[test]
+    fn append_with_cap_no_drop_when_under_limit() {
+        let mut buf = vec![1_i16, 2, 3];
+        let dropped = append_with_cap(&mut buf, &[4, 5], 10);
+        assert_eq!(dropped, 0);
+        assert_eq!(buf, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn append_with_cap_drops_oldest_to_make_room() {
+        let mut buf = vec![1_i16, 2, 3, 4, 5];
+        let dropped = append_with_cap(&mut buf, &[6, 7], 5);
+        assert_eq!(dropped, 2);
+        assert_eq!(buf, vec![3, 4, 5, 6, 7]);
+    }
+
+    #[test]
+    fn append_with_cap_handles_incoming_larger_than_max() {
+        let mut buf = vec![1_i16, 2, 3];
+        let dropped = append_with_cap(&mut buf, &[10, 11, 12, 13, 14, 15], 3);
+        // Old buffer dropped (3 samples) + first 3 of incoming dropped = 6 dropped
+        assert_eq!(dropped, 6);
+        assert_eq!(buf, vec![13, 14, 15]);
+    }
+
+    #[test]
+    fn append_with_cap_preserves_max_length_invariant() {
+        let mut buf: Vec<i16> = (0..100).collect();
+        for chunk_start in (100_i16..1000).step_by(50) {
+            let incoming: Vec<i16> = (chunk_start..chunk_start + 50).collect();
+            append_with_cap(&mut buf, &incoming, 200);
+            assert!(buf.len() <= 200, "buffer grew past cap: {}", buf.len());
+        }
+    }
+
+    #[test]
+    fn append_with_cap_empty_incoming_is_no_op() {
+        let mut buf = vec![1_i16, 2, 3];
+        let dropped = append_with_cap(&mut buf, &[], 5);
+        assert_eq!(dropped, 0);
+        assert_eq!(buf, vec![1, 2, 3]);
     }
 
     #[test]
