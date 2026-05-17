@@ -82,13 +82,13 @@ impl PeerConnectionHandler for PcHandler {
     }
 
     fn on_candidate(&mut self, candidate: IceCandidate) {
-        let shared = self.shared.lock().expect("DcShared mutex poisoned");
+        let shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         let _ = shared.ice_tx.send(candidate);
     }
 
     fn on_gathering_state_change(&mut self, state: GatheringState) {
         if state == GatheringState::Complete {
-            let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
+            let mut shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
             if let Some(tx) = shared.gathering_done_tx.take() {
                 let _ = tx.send(());
             }
@@ -96,7 +96,7 @@ impl PeerConnectionHandler for PcHandler {
     }
 
     fn on_connection_state_change(&mut self, state: ConnectionState) {
-        let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
+        let mut shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         shared.connection_state = state;
         if let Some(w) = shared.waker.take() {
             w.wake();
@@ -111,14 +111,14 @@ struct DcHandler {
 
 impl DataChannelHandler for DcHandler {
     fn on_open(&mut self) {
-        let mut shared = self.shared.lock().expect("DcShared mutex poisoned");
+        let mut shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(tx) = shared.open_tx.take() {
             let _ = tx.send(());
         }
     }
 
     fn on_message(&mut self, msg: &[u8]) {
-        let shared = self.shared.lock().expect("DcShared mutex poisoned");
+        let shared = self.shared.lock().unwrap_or_else(|p| p.into_inner());
         let _ = shared.msg_tx.send(msg.to_vec());
         if let Some(w) = shared.waker.as_ref() {
             w.wake_by_ref();
@@ -616,5 +616,25 @@ mod tests {
             sd_type_to_string(&string_to_sd_type("answer")),
             "answer"
         );
+    }
+
+    /// H1 regression — `lock().unwrap_or_else(|p| p.into_inner())` must
+    /// recover the inner data when the mutex has been poisoned by a
+    /// panicking thread. The five WebRTC FFI callbacks previously called
+    /// `.expect("DcShared mutex poisoned")` here, which would panic and
+    /// — because the callback runs on a libdatachannel C thread —
+    /// abort via SIGABRT on the panic-across-FFI unwind.
+    #[test]
+    fn poisoned_mutex_lock_returns_inner_state_via_into_inner() {
+        let m = std::sync::Arc::new(std::sync::Mutex::new(42_i32));
+        let m_clone = m.clone();
+        let _ = std::thread::spawn(move || {
+            let _guard = m_clone.lock().unwrap();
+            panic!("simulated callback panic");
+        })
+        .join();
+        assert!(m.is_poisoned(), "mutex must be poisoned after panic in holder");
+        let g = m.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(*g, 42, "poison-recovering lock must yield the inner data");
     }
 }
