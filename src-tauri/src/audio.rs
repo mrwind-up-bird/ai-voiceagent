@@ -47,6 +47,38 @@ pub struct VadEvent {
 // Global flag for recording state - this is safe because it's just an atomic bool
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
+/// RAII guard that ensures the recording flag is cleared even if the
+/// capture thread panics (C3, H3). Parameterised over the flag so tests
+/// can exercise it without touching global state.
+struct RecordingGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl<'a> RecordingGuard<'a> {
+    fn try_acquire(flag: &'a AtomicBool) -> Result<Self, String> {
+        if flag.swap(true, Ordering::SeqCst) {
+            return Err("Already recording".to_string());
+        }
+        Ok(Self { flag })
+    }
+}
+
+impl<'a> Drop for RecordingGuard<'a> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+fn panic_to_msg(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        return (*s).to_string();
+    }
+    if let Some(s) = payload.downcast_ref::<String>() {
+        return s.clone();
+    }
+    "audio capture thread panicked (unknown payload)".to_string()
+}
+
 fn calculate_energy(samples: &[f32]) -> f32 {
     // Audio PCM in f32 is contractually in [-1, 1]. Filter NaN/Inf and
     // clamp out-of-range samples so a misbehaving driver delivering
@@ -67,25 +99,39 @@ fn calculate_energy(samples: &[f32]) -> f32 {
 
 #[tauri::command]
 pub fn start_recording(app: AppHandle) -> Result<(), String> {
-    if IS_RECORDING.load(Ordering::SeqCst) {
-        return Err("Already recording".to_string());
-    }
+    // Acquire the recording flag through a guard that resets it even
+    // on panic-unwind from the spawned thread (C3).
+    let guard = RecordingGuard::try_acquire(&IS_RECORDING)?;
 
     // Clear the recording buffer for a new recording
     if let Ok(mut buffer) = RECORDING_BUFFER.lock() {
         buffer.clear();
     }
 
-    IS_RECORDING.store(true, Ordering::SeqCst);
-
     // Spawn a dedicated thread for audio capture (cpal::Stream is not Send)
     std::thread::spawn(move || {
-        let result = run_audio_capture(app.clone());
-        if let Err(e) = result {
-            tracing::error!("Audio capture error: {}", e);
-            let _ = app.emit("recording-error", e);
+        // The guard is moved into the thread; Drop runs on normal exit,
+        // early return, AND panic-unwind, always clearing IS_RECORDING.
+        let _guard = guard;
+        let app_for_err = app.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_audio_capture(app)
+        }));
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::error!("Audio capture error: {}", e);
+                let _ = app_for_err.emit("recording-error", e);
+            }
+            Err(panic_payload) => {
+                let msg = panic_to_msg(&panic_payload);
+                tracing::error!("Audio capture thread panicked: {}", msg);
+                let _ = app_for_err.emit(
+                    "recording-error",
+                    format!("audio capture panicked: {}", msg),
+                );
+            }
         }
-        IS_RECORDING.store(false, Ordering::SeqCst);
     });
 
     Ok(())
@@ -108,15 +154,22 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
             c.min_sample_rate().0 <= TARGET_SAMPLE_RATE && c.max_sample_rate().0 >= TARGET_SAMPLE_RATE
         })
         .map(|c| c.with_sample_rate(cpal::SampleRate(TARGET_SAMPLE_RATE)).into())
+        .map(Ok)
         .unwrap_or_else(|| {
-            // Fall back to default config if 16kHz isn't supported
-            let default = device.default_input_config().expect("No default input config available for audio device");
+            // Fall back to default config if 16kHz isn't supported (C3:
+            // propagate the error instead of panicking on devices with
+            // no retrievable default config — e.g. a USB mic unplugged
+            // between start() returning Ok and the spawned thread
+            // reaching this line).
+            let default = device
+                .default_input_config()
+                .map_err(|e| format!("No default input config for audio device: {}", e))?;
             tracing::warn!(
                 "16kHz not supported, using device default: {}Hz",
                 default.sample_rate().0
             );
-            default.into()
-        });
+            Ok::<cpal::StreamConfig, String>(default.into())
+        })?;
 
     let actual_sample_rate = config.sample_rate.0;
     let needs_resampling = actual_sample_rate != TARGET_SAMPLE_RATE;
@@ -359,6 +412,73 @@ mod tests {
     #[test]
     fn calculate_energy_empty_returns_zero() {
         assert_eq!(calculate_energy(&[]), 0.0);
+    }
+
+    // C3 regression tests — RecordingGuard must clear the flag on any
+    // exit path including panic-unwind, and must reject double-acquire.
+
+    #[test]
+    fn guard_resets_flag_on_drop() {
+        let flag = AtomicBool::new(false);
+        {
+            let _g = RecordingGuard::try_acquire(&flag).expect("acquire");
+            assert!(flag.load(Ordering::SeqCst));
+        }
+        assert!(!flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn guard_resets_flag_on_panic_unwind() {
+        let flag = AtomicBool::new(false);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = RecordingGuard::try_acquire(&flag).expect("acquire");
+            assert!(flag.load(Ordering::SeqCst));
+            panic!("simulated audio thread panic");
+        }));
+        assert!(result.is_err(), "panic must propagate out of closure");
+        assert!(
+            !flag.load(Ordering::SeqCst),
+            "RecordingGuard must reset flag during unwind"
+        );
+    }
+
+    #[test]
+    fn guard_rejects_double_acquire() {
+        let flag = AtomicBool::new(false);
+        let _g = RecordingGuard::try_acquire(&flag).expect("first acquire");
+        assert!(
+            RecordingGuard::try_acquire(&flag).is_err(),
+            "second acquire while held must fail"
+        );
+    }
+
+    #[test]
+    fn guard_releases_then_reacquires() {
+        let flag = AtomicBool::new(false);
+        {
+            let _g = RecordingGuard::try_acquire(&flag).expect("first");
+        }
+        let _g2 = RecordingGuard::try_acquire(&flag).expect("second after drop");
+    }
+
+    #[test]
+    fn panic_to_msg_extracts_str_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new("boom static str");
+        assert_eq!(panic_to_msg(&payload), "boom static str");
+    }
+
+    #[test]
+    fn panic_to_msg_extracts_string_payload() {
+        let payload: Box<dyn std::any::Any + Send> = Box::new(String::from("boom string"));
+        assert_eq!(panic_to_msg(&payload), "boom string");
+    }
+
+    #[test]
+    fn panic_to_msg_falls_back_for_unknown_payload() {
+        #[derive(Debug)]
+        struct Weird;
+        let payload: Box<dyn std::any::Any + Send> = Box::new(Weird);
+        assert!(panic_to_msg(&payload).contains("unknown payload"));
     }
 
     #[test]
