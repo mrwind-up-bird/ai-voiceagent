@@ -302,6 +302,16 @@ export function useTauriEvents() {
         });
         listeners.push(unlistenDeepgramConnected);
 
+        // C6: 3 s after start_recording, if zero audio chunks observed,
+        // Rust emits this — typical signature of macOS/iOS mic
+        // permission denial or first-launch tap before OS prompt.
+        const unlistenMicPermissionDenied = await listen('mic-permission-denied', () => {
+          useVoiceStore.getState().setError(
+            'No audio detected. Check microphone permission in System Settings → Privacy.'
+          );
+        });
+        listeners.push(unlistenMicPermissionDenied);
+
         // C7: bounded exponential-backoff reconnect when the WS drops
         // mid-session (Wi-Fi handoff, Deepgram idle timeout, transient
         // 5xx). Mirrors compute_deepgram_backoff_ms in Rust.

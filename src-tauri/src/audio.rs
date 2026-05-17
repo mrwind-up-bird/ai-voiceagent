@@ -61,6 +61,15 @@ static CONSECUTIVE_AUDIO_DROPS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 const AUDIO_DROP_WARN_THRESHOLD: usize = 3;
 
+/// C6 — total chunks observed by the cpal callback since the most
+/// recent start. The capture supervisor spawns a watchdog that
+/// emits `mic-permission-denied` if this counter hasn't moved 3 s
+/// after the stream was started — typical signature of macOS / iOS
+/// privacy revocation or pre-prompt first-launch tap.
+static AUDIO_CHUNKS_SEEN: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+const MIC_PERMISSION_WATCHDOG_MS: u64 = 3_000;
+
 /// RAII guard that ensures the recording flag is cleared even if the
 /// capture thread panics (C3, H3). Parameterised over the flag so tests
 /// can exercise it without touching global state.
@@ -257,6 +266,10 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
                 if !IS_RECORDING.load(Ordering::SeqCst) {
                     return;
                 }
+                // C6: mark that audio is actually flowing so the
+                // permission watchdog can distinguish "user just
+                // hasn't spoken yet" from "no callbacks ever fired".
+                AUDIO_CHUNKS_SEEN.fetch_add(1, Ordering::Relaxed);
 
                 // Convert stereo to mono if needed
                 let mono_samples: Vec<f32> = if channels > 1 {
@@ -356,6 +369,23 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
         .map_err(|e| format!("Failed to build stream: {}", e))?;
 
     stream.play().map_err(|e| format!("Failed to start stream: {}", e))?;
+
+    // C6: reset chunk counter and spawn a 3s permission watchdog.
+    AUDIO_CHUNKS_SEEN.store(0, Ordering::SeqCst);
+    let watchdog_app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(MIC_PERMISSION_WATCHDOG_MS));
+        if !IS_RECORDING.load(Ordering::SeqCst) {
+            return; // user stopped before watchdog fired
+        }
+        if AUDIO_CHUNKS_SEEN.load(Ordering::SeqCst) == 0 {
+            tracing::warn!(
+                "No audio chunks in {} ms after start — likely mic permission denied",
+                MIC_PERMISSION_WATCHDOG_MS
+            );
+            let _ = watchdog_app.emit("mic-permission-denied", ());
+        }
+    });
 
     let _ = app.emit("recording-started", ());
 
