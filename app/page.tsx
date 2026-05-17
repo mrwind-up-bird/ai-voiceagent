@@ -22,7 +22,32 @@ export default function Home() {
   const { isDesktop, supportsWindowControls, supportsKeyboardShortcuts } = usePlatform();
   const { createSession, joinSession, leaveSession, syncTranscript, syncAgentResult } = useSync();
   const [showSyncPanel, setShowSyncPanel] = useState(false);
+  const [needsApiKeys, setNeedsApiKeys] = useState<boolean | null>(null);
   const prevTranscriptRef = useRef(transcript);
+
+  // C4: probe api-key configuration on mount and on every window
+  // focus so first-run users (or users who deleted a key) see a
+  // banner instead of recording into the void.
+  useEffect(() => {
+    let cancelled = false;
+    const probe = async () => {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const has = await invoke<boolean>('has_api_keys');
+        if (!cancelled) setNeedsApiKeys(!has);
+      } catch {
+        // Running in browser or command missing — don't block UI.
+        if (!cancelled) setNeedsApiKeys(false);
+      }
+    };
+    probe();
+    const onFocus = () => probe();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+    };
+  }, []);
 
   // H6: useTauriEvents() + useAudioForwarding() are hoisted to the
   // root layout so they survive navigation to /settings without
@@ -183,6 +208,22 @@ export default function Home() {
           {error && (
             <div className="mb-4 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
               <p className="text-red-400 text-sm">{error}</p>
+            </div>
+          )}
+
+          {needsApiKeys && (
+            // C4 first-run gate — without this, an unconfigured user
+            // could tap the mic and watch a frozen UI forever.
+            <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-center justify-between gap-3">
+              <p className="text-amber-300 text-sm">
+                No transcription API key configured. Recording will not produce a transcript.
+              </p>
+              <Link
+                href="/settings"
+                className="shrink-0 px-3 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-100 text-sm transition"
+              >
+                Open settings
+              </Link>
             </div>
           )}
 
