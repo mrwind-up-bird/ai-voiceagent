@@ -714,7 +714,7 @@ async fn discover_and_connect(
             }
         });
 
-        return Ok(handle);
+        Ok(handle)
     }
 
     // Mobile: no WebRTC fallback available

@@ -95,6 +95,9 @@ jni = "0.21"
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
 
+[dev-dependencies]
+proptest = "1"
+
 [profile.release]
 strip = true
 lto = true

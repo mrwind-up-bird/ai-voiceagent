@@ -158,7 +158,7 @@ impl Stream for DataChannelStream {
                     Err(e) => {
                         // If not valid UTF-8, treat as binary
                         Poll::Ready(Some(Ok(tungstenite::Message::Binary(
-                            e.into_bytes().into(),
+                            e.into_bytes(),
                         ))))
                     }
                 }
@@ -196,8 +196,7 @@ impl Sink<tungstenite::Message> for DataChannelSink {
         };
         self.dc
             .send(&bytes)
-            .map_err(|e| tungstenite::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
+            .map_err(|e| tungstenite::Error::Io(std::io::Error::other(
                 format!("DataChannel send failed: {}", e),
             )))
     }
@@ -336,7 +335,7 @@ pub async fn establish_webrtc_transport(
         signaling.send(envelope_json.as_bytes()).await?;
 
         // Send ICE candidates as they're gathered
-        let signaling_ice = send_ice_candidates(&mut ice_rx, &encryption, &signaling).await;
+        let _signaling_ice = send_ice_candidates(&mut ice_rx, &encryption, &signaling).await;
 
         // Wait for gathering to complete, then signal done
         let _ = gathering_done_rx.await;
@@ -371,9 +370,6 @@ pub async fn establish_webrtc_transport(
 
         // Receive remote ICE candidates
         receive_ice_candidates(&mut signaling, &encryption, &mut pc).await?;
-
-        // Wait for any remaining local ICE candidates
-        let _ = signaling_ice;
 
         dc
     } else {

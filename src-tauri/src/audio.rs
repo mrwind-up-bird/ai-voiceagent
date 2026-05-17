@@ -48,11 +48,21 @@ pub struct VadEvent {
 static IS_RECORDING: AtomicBool = AtomicBool::new(false);
 
 fn calculate_energy(samples: &[f32]) -> f32 {
-    if samples.is_empty() {
+    // Audio PCM in f32 is contractually in [-1, 1]. Filter NaN/Inf and
+    // clamp out-of-range samples so a misbehaving driver delivering
+    // hostile floats cannot poison the VAD threshold (L1).
+    let (sum, count) = samples.iter().fold((0.0_f32, 0_usize), |(acc, n), s| {
+        if s.is_finite() {
+            let clamped = s.clamp(-1.0, 1.0);
+            (acc + clamped * clamped, n + 1)
+        } else {
+            (acc, n)
+        }
+    });
+    if count == 0 {
         return 0.0;
     }
-    let sum: f32 = samples.iter().map(|s| s * s).sum();
-    (sum / samples.len() as f32).sqrt()
+    (sum / count as f32).sqrt()
 }
 
 #[tauri::command]
@@ -339,4 +349,80 @@ pub fn clear_recording_buffer() -> Result<(), String> {
         .map_err(|_| "Failed to lock recording buffer")?;
     buffer.clear();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn calculate_energy_empty_returns_zero() {
+        assert_eq!(calculate_energy(&[]), 0.0);
+    }
+
+    #[test]
+    fn resample_empty_returns_empty() {
+        assert!(resample(&[], 48_000, 16_000).is_empty());
+    }
+
+    #[test]
+    fn resample_identity_when_rates_equal() {
+        let samples = vec![1_i16, 2, 3, -4, 5];
+        assert_eq!(resample(&samples, 16_000, 16_000), samples);
+    }
+
+    proptest! {
+        #[test]
+        fn resample_never_panics_for_any_input(
+            samples in proptest::collection::vec(any::<i16>(), 0..2_000),
+            source_rate in 0u32..200_000,
+            target_rate in 0u32..200_000,
+        ) {
+            let _ = resample(&samples, source_rate, target_rate);
+        }
+
+        #[test]
+        fn resample_identity_proptest(
+            samples in proptest::collection::vec(any::<i16>(), 0..1_000),
+            rate in 1u32..200_000,
+        ) {
+            prop_assert_eq!(resample(&samples, rate, rate), samples);
+        }
+
+        #[test]
+        fn calculate_energy_finite_for_bounded_input(
+            samples in proptest::collection::vec(-1.0_f32..=1.0_f32, 0..2_000),
+        ) {
+            let e = calculate_energy(&samples);
+            prop_assert!(e.is_finite(), "energy not finite for bounded input: {}", e);
+            prop_assert!(e >= 0.0, "energy negative: {}", e);
+        }
+
+        #[test]
+        fn calculate_energy_never_panics_for_any_finite_input(
+            samples in proptest::collection::vec(prop_oneof![
+                -1e10_f32..=1e10_f32,
+                Just(0.0_f32),
+            ], 0..1_000),
+        ) {
+            let _ = calculate_energy(&samples);
+        }
+
+        #[test]
+        fn calculate_energy_handles_nan_and_inf_without_panic(
+            samples in proptest::collection::vec(prop_oneof![
+                Just(f32::NAN),
+                Just(f32::INFINITY),
+                Just(f32::NEG_INFINITY),
+                any::<f32>(),
+            ], 0..200),
+        ) {
+            // L1: NaN/Inf may produce NaN output today (documented bug).
+            // After fix, output must be finite even on hostile input.
+            let e = calculate_energy(&samples);
+            prop_assert!(e.is_finite(), "energy not finite on NaN/Inf input: {}", e);
+            prop_assert!(e >= 0.0, "energy negative on NaN/Inf input: {}", e);
+        }
+    }
 }

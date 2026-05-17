@@ -37,6 +37,12 @@ pub struct SyncDocument {
     doc: Doc,
 }
 
+impl Default for SyncDocument {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SyncDocument {
     /// Create a new empty document and pre-initialise all expected maps.
     pub fn new() -> Self {
