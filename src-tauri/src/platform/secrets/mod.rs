@@ -115,6 +115,11 @@ pub const VALID_KEY_TYPES: &[&str] = &[
     "qrecords",
     "nyxcore_axiom",
     "persona_studio",
+    // Sub-Project E — optional override for the nyxCore base URL.
+    // Stored alongside tokens for simplicity (still encrypted at rest,
+    // even though the value isn't strictly secret). Empty → use the
+    // local-dev default in nyxcore/client.rs.
+    "nyxcore_base_url",
 ];
 
 /// Check if a key type is valid

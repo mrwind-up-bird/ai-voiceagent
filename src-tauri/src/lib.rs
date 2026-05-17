@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod nyxcore;
 pub mod platform;
 pub mod secrets;
 pub mod sync;
@@ -135,6 +136,10 @@ pub fn run() {
             secrets::delete_api_key,
             secrets::has_api_keys,
             secrets::list_configured_keys,
+            // nyxCore integrations (Sub-Project E)
+            nyxcore::list_personas,
+            nyxcore::apply_persona_tone,
+            nyxcore::axiom_search,
             // Audio commands (desktop only)
             #[cfg(not(any(target_os = "ios", target_os = "android")))]
             audio::start_recording,
