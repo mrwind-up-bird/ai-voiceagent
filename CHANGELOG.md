@@ -68,6 +68,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Features — Sub-Projects C, D, E, F (2026-05-17)
+
+#### C — Speaker Diarization
+- Deepgram WS URL extended with `diarize=true`; transcript event payload now carries per-segment `speaker: Option<u32>` (dominant voice via majority vote across words) plus per-word `Vec<TranscriptWord>` for overlap/interruption cases.
+- `voiceStore.transcriptSegments` records `{ text, speaker }` per final segment (capped at 500 entries to match H7 transcript cap).
+- `TranscriptDisplay` renders speaker-labeled segments with a stable 8-color hue palette when 2+ speakers detected; flat view otherwise.
+
+#### D — Settings UI for Persona / Axiom Tokens
+- New keychain slots: `persona_studio` (Bearer `nyx_pa_…` for Persona Studio), `nyxcore_axiom` (Bearer for nyxCore Axiom RAG), `nyxcore_base_url` (optional override of the localhost:3000 default).
+- Settings page extended with the two new token fields using the existing generic `set_api_key` / `get_api_key` Tauri commands.
+
+#### E — Persona / Axiom Integration
+- New module `src-tauri/src/nyxcore/`:
+  - Shared `reqwest::Client` with 5s connect / 30s total timeout (M6 fix carried forward).
+  - `list_personas` → GET `/api/v1/persona/list`.
+  - `apply_persona_tone(text, persona_id, circle_id)` → POST `/api/v1/persona/chat` for persona-voiced rewording.
+  - `axiom_search(query, project_id, limit)` → POST `/api/v1/rag/search` for knowledge-base lookups.
+- `PersonaSelector` component in Settings — lazy-loaded persona catalogue with tag-pill picker and lead-marker (★).
+- `app/lib/personaPreference.ts` — localStorage helpers for the selected persona/circle, broadcasting `aurus:persona-changed` events.
+
+#### F — Action Items: Categories + Rationale
+- `ActionItem` extended with `category` (work / personal / errand / follow-up / decision / research / other) and `rationale` (one-sentence "why this priority + due date").
+- System prompt updated to require concrete ISO dates in `due_date` (no more "soon"), an enumerated category, and a rationale field.
+- `normalize_priority` + `normalize_category` helpers (Rust + TS mirror) canonicalize free-text values into stable buckets. Whole-word matching with order-matters — "decide on framework" resolves to `decision`, not `work`.
+- `AgentResults` renders categorized groups with colored accent borders + counts when there are 2+ categories; flat list otherwise. Rationale shown italicised under each task.
+- 24 new regression tests across the four sub-projects.
+
 ### Security & Stability — Crash-Stability Audit 2026-05-17
 
 5 parallel persona-lens agents (Nemesis, Aletheia, Ipcha, Athena, Metis) audited the full stack with iOS lookahead. Cael judge consolidated 57 raw findings into 43 canonical entries (7 Critical, 11 High, 18 Medium, 7 Low). 16 in-session fixes shipped; 2 iOS-only Criticals + 24 Medium/Low findings tracked as nyxCore Action Points for Sub-Project A.
