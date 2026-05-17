@@ -22,10 +22,17 @@ pub(crate) fn get_key_or_error(key_type: &str) -> Result<String, String> {
 /// Store an API key securely in the system keychain/keystore
 #[tauri::command]
 pub async fn set_api_key(key_type: String, value: String) -> Result<(), String> {
+    // Trim leading/trailing whitespace — users frequently paste tokens
+    // with a trailing newline or space from terminal output, and the
+    // upstream API then rejects them with a confusing 401. Internal
+    // whitespace is preserved (legitimate for some token formats).
+    let trimmed = value.trim();
+
     tracing::info!(
-        "set_api_key called for: {} (value len: {})",
+        "set_api_key called for: {} (raw len: {}, trimmed len: {})",
         key_type,
-        value.len()
+        value.len(),
+        trimmed.len()
     );
 
     if !is_valid_key_type(&key_type) {
@@ -36,12 +43,12 @@ pub async fn set_api_key(key_type: String, value: String) -> Result<(), String> 
         ));
     }
 
-    if value.is_empty() {
+    if trimmed.is_empty() {
         return Err("API key value cannot be empty".to_string());
     }
 
     let storage = get_storage();
-    storage.set(&key_type, &value)?;
+    storage.set(&key_type, trimmed)?;
 
     tracing::info!("API key '{}' stored in secure storage", key_type);
     Ok(())
@@ -124,6 +131,15 @@ mod tests {
     #[tokio::test]
     async fn test_empty_value() {
         let result = set_api_key("openai".to_string(), "".to_string()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot be empty"));
+    }
+
+    #[tokio::test]
+    async fn test_whitespace_only_value_rejected() {
+        // After the trim() introduced for the persona-token UX, a
+        // whitespace-only paste must be rejected the same as empty.
+        let result = set_api_key("openai".to_string(), "   \n\t  ".to_string()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot be empty"));
     }
