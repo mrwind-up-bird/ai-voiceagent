@@ -79,6 +79,27 @@ fn panic_to_msg(payload: &Box<dyn std::any::Any + Send>) -> String {
     "audio capture thread panicked (unknown payload)".to_string()
 }
 
+/// Supervise the audio capture loop. Returns Err if the CPAL error
+/// callback flipped `stream_healthy` to false (H3 — previously the
+/// callback only logged, leaving UI stuck in "recording"). Extracted
+/// for unit-testing without a real cpal stream.
+fn wait_for_capture_end(
+    is_recording: &AtomicBool,
+    stream_healthy: &AtomicBool,
+    tick: std::time::Duration,
+) -> Result<(), String> {
+    while is_recording.load(Ordering::SeqCst) && stream_healthy.load(Ordering::SeqCst) {
+        std::thread::sleep(tick);
+    }
+    if !stream_healthy.load(Ordering::SeqCst) {
+        return Err(
+            "audio stream errored (device unplugged, exclusive-mode contention, or driver hiccup)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 fn calculate_energy(samples: &[f32]) -> f32 {
     // Audio PCM in f32 is contractually in [-1, 1]. Filter NaN/Inf and
     // clamp out-of-range samples so a misbehaving driver delivering
@@ -185,6 +206,11 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
     // Calculate chunk size based on actual sample rate (~100ms of audio)
     let chunk_size = (actual_sample_rate as usize) / 10; // 100ms worth of samples
 
+    // H3: shared health flag flipped to false from the CPAL error
+    // callback so the supervisor loop can break and emit recording-error.
+    let stream_healthy = Arc::new(AtomicBool::new(true));
+    let stream_healthy_err = stream_healthy.clone();
+
     let stream = device
         .build_input_stream(
             &config,
@@ -251,8 +277,11 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
                     }
                 }
             },
-            |err| {
+            move |err| {
                 tracing::error!("Audio stream error: {}", err);
+                // H3: signal the supervisor loop so it exits + emits
+                // recording-error instead of leaving UI stuck.
+                stream_healthy_err.store(false, Ordering::SeqCst);
             },
             None,
         )
@@ -262,15 +291,17 @@ fn run_audio_capture(app: AppHandle) -> Result<(), String> {
 
     let _ = app.emit("recording-started", ());
 
-    // Keep stream alive while recording
-    while IS_RECORDING.load(Ordering::SeqCst) {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    // Supervised loop — returns Err if stream errored mid-session.
+    let supervise_result = wait_for_capture_end(
+        &IS_RECORDING,
+        &stream_healthy,
+        std::time::Duration::from_millis(100),
+    );
 
     // Stream is dropped here, stopping the recording
     let _ = app.emit("recording-stopped", ());
 
-    Ok(())
+    supervise_result
 }
 
 #[tauri::command]
@@ -459,6 +490,50 @@ mod tests {
             let _g = RecordingGuard::try_acquire(&flag).expect("first");
         }
         let _g2 = RecordingGuard::try_acquire(&flag).expect("second after drop");
+    }
+
+    // H3 — wait_for_capture_end supervisor tests
+
+    #[test]
+    fn supervisor_returns_ok_on_normal_stop() {
+        let is_rec = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(AtomicBool::new(true));
+        let is_rec_c = is_rec.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            is_rec_c.store(false, Ordering::SeqCst);
+        });
+        let res = wait_for_capture_end(&is_rec, &healthy, std::time::Duration::from_millis(5));
+        assert!(res.is_ok(), "normal stop should return Ok, got: {:?}", res);
+    }
+
+    #[test]
+    fn supervisor_returns_err_on_stream_unhealthy() {
+        let is_rec = Arc::new(AtomicBool::new(true));
+        let healthy = Arc::new(AtomicBool::new(true));
+        let healthy_c = healthy.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            healthy_c.store(false, Ordering::SeqCst);
+        });
+        let res = wait_for_capture_end(&is_rec, &healthy, std::time::Duration::from_millis(5));
+        assert!(res.is_err(), "unhealthy stream must produce Err");
+        let msg = res.unwrap_err();
+        assert!(
+            msg.contains("audio stream errored"),
+            "error message should mention stream error: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn supervisor_returns_immediately_if_already_stopped() {
+        let is_rec = AtomicBool::new(false);
+        let healthy = AtomicBool::new(true);
+        let start = std::time::Instant::now();
+        let res = wait_for_capture_end(&is_rec, &healthy, std::time::Duration::from_millis(100));
+        assert!(res.is_ok());
+        assert!(start.elapsed() < std::time::Duration::from_millis(50));
     }
 
     #[test]
