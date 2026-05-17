@@ -6,16 +6,28 @@ const MAX_TRANSCRIPT_LENGTH: usize = 100_000; // ~100KB
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionItem {
+    // H8: tolerate API drift / partial generations — these fields used
+    // to be required (`String`), and a model omitting `priority` would
+    // leak a raw serde error to the UI with transcript snippets. Now
+    // missing fields default to empty/lowercase-default values.
+    #[serde(default)]
     pub task: String,
     pub assignee: Option<String>,
     pub due_date: Option<String>,
+    #[serde(default = "default_priority")]
     pub priority: String,
     pub context: Option<String>,
 }
 
+fn default_priority() -> String {
+    "medium".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionItemsResult {
+    #[serde(default)]
     pub items: Vec<ActionItem>,
+    #[serde(default)]
     pub summary: String,
 }
 
@@ -133,4 +145,45 @@ pub async fn extract_action_items_streaming(
     let _ = app.emit("action-items-complete", &result);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // H8 — ActionItemsResult must tolerate API schema drift without
+    // leaking raw serde errors (which previously included transcript
+    // snippets) to the UI.
+
+    #[test]
+    fn action_items_result_parses_with_missing_priority() {
+        let json = r#"{"items":[{"task":"buy milk"}], "summary":"ok"}"#;
+        let r: ActionItemsResult = serde_json::from_str(json).expect("parse");
+        assert_eq!(r.items.len(), 1);
+        assert_eq!(r.items[0].priority, "medium");
+    }
+
+    #[test]
+    fn action_items_result_parses_with_missing_task() {
+        let json = r#"{"items":[{"priority":"high"}], "summary":"ok"}"#;
+        let r: ActionItemsResult = serde_json::from_str(json).expect("parse");
+        assert_eq!(r.items[0].task, "");
+        assert_eq!(r.items[0].priority, "high");
+    }
+
+    #[test]
+    fn action_items_result_parses_empty_object() {
+        let json = "{}";
+        let r: ActionItemsResult = serde_json::from_str(json).expect("parse");
+        assert!(r.items.is_empty());
+        assert_eq!(r.summary, "");
+    }
+
+    #[test]
+    fn action_items_result_parses_with_only_summary() {
+        let json = r#"{"summary":"no actionable items"}"#;
+        let r: ActionItemsResult = serde_json::from_str(json).expect("parse");
+        assert!(r.items.is_empty());
+        assert_eq!(r.summary, "no actionable items");
+    }
 }

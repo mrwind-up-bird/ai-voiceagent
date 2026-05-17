@@ -177,9 +177,15 @@ pub async fn shift_tone(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
+    // H8: API schema drift, safety-block, or content_filter can leave
+    // `content[0].text` as null. Surfacing an empty string as success
+    // hides the failure from the user; require an explicit Err.
     let shifted_text = response_json["content"][0]["text"]
         .as_str()
-        .unwrap_or("")
+        .ok_or_else(|| {
+            "Anthropic API returned no content (possible safety block or schema drift)"
+                .to_string()
+        })?
         .to_string();
 
     let result = ToneShiftResult {
@@ -455,4 +461,35 @@ pub fn get_tone_presets() -> Vec<TonePreset> {
             color: "#F97316".to_string(), // orange
         },
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    // H8 — verify that the `as_str().ok_or(...)?` pattern triggers
+    // when Anthropic returns null content (safety block / filter),
+    // instead of the prior `.unwrap_or("")` silent-success fallback.
+    #[test]
+    fn null_content_is_err_not_empty_string() {
+        let response = json!({"content":[{"type":"text","text":null}]});
+        let text = response["content"][0]["text"].as_str();
+        assert!(
+            text.is_none(),
+            "null text must yield None so caller can return Err"
+        );
+    }
+
+    #[test]
+    fn missing_content_is_err_not_empty_string() {
+        let response = json!({});
+        let text = response["content"][0]["text"].as_str();
+        assert!(text.is_none());
+    }
+
+    #[test]
+    fn valid_text_passes_through() {
+        let response = json!({"content":[{"type":"text","text":"hello"}]});
+        assert_eq!(response["content"][0]["text"].as_str(), Some("hello"));
+    }
 }

@@ -181,9 +181,14 @@ pub async fn translate_text(
         .await
         .map_err(|e| format!("Failed to parse response: {}", e))?;
 
+    // H8: same as tone_shifter — OpenAI may return null content on
+    // refusal / filter / truncated stream. Don't pretend it succeeded.
     let translated_text = response_json["choices"][0]["message"]["content"]
         .as_str()
-        .unwrap_or("")
+        .ok_or_else(|| {
+            "OpenAI API returned no content (possible refusal, filter, or schema drift)"
+                .to_string()
+        })?
         .to_string();
 
     let result = TranslationResult {
@@ -336,4 +341,32 @@ pub fn get_available_languages() -> Vec<serde_json::Value> {
         serde_json::json!({ "code": "ko", "name": "Korean", "isSource": true }),
         serde_json::json!({ "code": "ar", "name": "Arabic", "isSource": true }),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    // H8 — OpenAI returns null content on refusal/filter/truncated
+    // stream. The `.as_str().ok_or(...)?` pattern must catch this.
+    #[test]
+    fn null_content_yields_none() {
+        let response = json!({"choices":[{"message":{"content":null}}]});
+        assert!(response["choices"][0]["message"]["content"].as_str().is_none());
+    }
+
+    #[test]
+    fn missing_choices_yields_none() {
+        let response = json!({});
+        assert!(response["choices"][0]["message"]["content"].as_str().is_none());
+    }
+
+    #[test]
+    fn valid_translation_passes_through() {
+        let response = json!({"choices":[{"message":{"content":"Hallo"}}]});
+        assert_eq!(
+            response["choices"][0]["message"]["content"].as_str(),
+            Some("Hallo")
+        );
+    }
 }
