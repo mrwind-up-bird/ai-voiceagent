@@ -35,6 +35,14 @@ export default function Home() {
       const { invoke } = await import('@tauri-apps/api/core');
       const hasShortcut = await invoke<boolean>('is_shortcut_registered');
       if (!hasShortcut) return; // Don't hide — no shortcut to bring it back
+      // H5: stop recording before hiding so a rage-Escape doesn't
+      // leave the audio thread + Deepgram WS running in the background
+      // draining battery and burning quota.
+      const recording = await invoke<boolean>('is_recording').catch(() => false);
+      if (recording) {
+        await invoke('stop_recording').catch(() => {});
+        await invoke('stop_deepgram_stream').catch(() => {});
+      }
       const { getCurrentWindow } = await import('@tauri-apps/api/window');
       const window = getCurrentWindow();
       await window.hide();

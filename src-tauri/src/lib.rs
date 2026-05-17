@@ -59,6 +59,17 @@ pub fn run() {
                 let toggle_window = |app_handle: &tauri::AppHandle| {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         if window.is_visible().unwrap_or(false) {
+                            // H5: hiding the window via the hotkey
+                            // (rage-toggle) must stop any in-flight
+                            // recording — otherwise the audio thread
+                            // keeps draining the buffer + flooding
+                            // Deepgram with battery + quota loss.
+                            if crate::audio::is_recording() {
+                                tracing::info!(
+                                    "Hotkey hide while recording — stopping capture"
+                                );
+                                let _ = crate::audio::stop_recording(app_handle.clone());
+                            }
                             let _ = window.hide();
                         } else {
                             let _ = window.show();
