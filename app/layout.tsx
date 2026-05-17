@@ -3,6 +3,21 @@
 import './globals.css';
 import { useEffect } from 'react';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { useTauriEvents } from './hooks/useTauriEvents';
+import { useAudioForwarding } from './hooks/useDeepgramStreaming';
+
+/**
+ * GlobalListeners mounts the Tauri event hook + audio forwarding at
+ * the layout level (H6) so navigating between `/` and `/settings`
+ * does NOT unmount the listeners and orphan in-flight transcripts.
+ * Without this, every "click gear, edit key, click back" mid-thought
+ * silently dropped any words spoken during the transit.
+ */
+function GlobalListeners() {
+  useTauriEvents();
+  useAudioForwarding();
+  return null;
+}
 
 export default function RootLayout({
   children,
@@ -32,7 +47,10 @@ export default function RootLayout({
         <title>Voice Intelligence Hub</title>
       </head>
       <body className="bg-transparent">
-        <ErrorBoundary>{children}</ErrorBoundary>
+        <ErrorBoundary>
+          <GlobalListeners />
+          {children}
+        </ErrorBoundary>
       </body>
     </html>
   );

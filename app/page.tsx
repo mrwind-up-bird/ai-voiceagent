@@ -12,8 +12,6 @@ import { ToneSelector } from './components/ToneSelector';
 import { ResizeHandle } from './components/ResizeHandle';
 import SyncStatus from './components/SyncStatus';
 import { SyncPairing } from './components/SyncPairing';
-import { useTauriEvents } from './hooks/useTauriEvents';
-import { useAudioForwarding } from './hooks/useDeepgramStreaming';
 import { useEscapeKey } from './hooks/useGlobalShortcut';
 import { useSync } from './hooks/useSync';
 import { useVoiceStore } from './store/voiceStore';
@@ -26,8 +24,9 @@ export default function Home() {
   const [showSyncPanel, setShowSyncPanel] = useState(false);
   const prevTranscriptRef = useRef(transcript);
 
-  useTauriEvents();
-  useAudioForwarding();
+  // H6: useTauriEvents() + useAudioForwarding() are hoisted to the
+  // root layout so they survive navigation to /settings without
+  // dropping transcripts during route transitions.
 
   // Desktop-only: hide window on Escape (only if global shortcut is registered to bring it back)
   useEscapeKey(async () => {
