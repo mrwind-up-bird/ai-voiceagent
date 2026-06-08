@@ -45,7 +45,21 @@
       "WebFetch(domain:api.github.com)",
       "WebFetch(domain:crates.io)",
       "Bash(ls:*)",
-      "Bash(npm install -g @anthropic-ai/claude-code)"
+      "Bash(npm install -g @anthropic-ai/claude-code)",
+      "Bash(export PATH=\"$HOME/.local/share/pnpm:$HOME/.nvm/versions/node/*/bin:$HOME/.volta/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\")",
+      "Read(//Users/oli/Library/**)",
+      "Read(//opt/homebrew/bin/**)",
+      "Read(//usr/local/**)",
+      "Bash(command -v corepack)",
+      "Bash(export PATH=\"/opt/homebrew/opt/node@22/bin:$PATH\")",
+      "Bash(corepack enable:*)",
+      "Bash(corepack prepare:*)",
+      "Read(//Users/oli/.cargo/bin/**)",
+      "Read(//Users/oli/.rustup/**)",
+      "Bash(sh -s -- -y)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:/opt/homebrew/opt/node@22/bin:$PATH\")",
+      "Bash(brew list:*)",
+      "Bash(export PATH=\"$HOME/.cargo/bin:/opt/homebrew/bin:/opt/homebrew/opt/node@22/bin:$PATH\")"
     ]
   }
 }
